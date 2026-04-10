@@ -1,0 +1,4 @@
+project_id = "ysnbynpxjmumabgxuoau"
+
+[functions.taskrow-proxy]
+verify_jwt = false

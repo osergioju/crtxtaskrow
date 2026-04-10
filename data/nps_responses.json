@@ -1,0 +1,46 @@
+[
+  {
+    "id": "ae605ef7-c9c6-4107-8542-6164bad84232",
+    "clientId": "77258",
+    "clientName": "BB Previdência",
+    "token": "90974b55-62b6-4894-8a2d-0a41dc8e398d",
+    "cycleId": null,
+    "cycleLabel": null,
+    "answers": {
+      "q1": 9,
+      "q2": 10,
+      "q3": 8,
+      "q4": 10,
+      "q5": 10,
+      "q6": 9,
+      "q7": 10,
+      "q8": 10,
+      "q9": 8,
+      "q10": 10,
+      "comment": "Show!!!"
+    },
+    "createdAt": "2026-04-09T15:35:17.662Z"
+  },
+  {
+    "id": "ff562650-4afb-43cf-8de3-bb5ce7bdc66a",
+    "clientId": "77258",
+    "clientName": "BB Previdência",
+    "token": "8be21b27-0c0b-48ee-9624-aa864ba4c2d2",
+    "cycleId": null,
+    "cycleLabel": null,
+    "answers": {
+      "q1": 10,
+      "q2": 10,
+      "q3": 10,
+      "q4": 10,
+      "q5": 10,
+      "q6": 10,
+      "q7": 10,
+      "q8": 10,
+      "q9": 10,
+      "q10": 10,
+      "comment": "Show!!"
+    },
+    "createdAt": "2026-04-09T15:35:40.240Z"
+  }
+]
