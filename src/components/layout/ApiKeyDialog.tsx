@@ -20,17 +20,26 @@ export function ApiKeyDialog({ trigger }: { trigger?: React.ReactNode }) {
   const [open, setOpen] = useState(false);
   const [value, setValue] = useState(apiKey);
 
-  const handleSave = () => {
+  const syncKeyToServer = (key: string) =>
+    fetch("/api/config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ taskrowApiKey: key }),
+    }).catch(() => {}); // não bloqueia — falha silenciosa em dev sem servidor
+
+  const handleSave = async () => {
     const trimmed = value.trim();
     if (!trimmed) return;
     setApiKey(trimmed);
+    await syncKeyToServer(trimmed);
     setOpen(false);
     toast({ title: "API Key salva", description: "Conexão com o Taskrow configurada." });
   };
 
-  const handleRemove = () => {
+  const handleRemove = async () => {
     setApiKey("");
     setValue("");
+    await syncKeyToServer("");
     setOpen(false);
     toast({ title: "API Key removida", description: "A conexão com o Taskrow foi desconectada." });
   };

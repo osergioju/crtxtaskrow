@@ -14,6 +14,7 @@ const DATA_DIR = path.resolve(__dirname, "data");
 const TOKENS_FILE = path.join(DATA_DIR, "nps_tokens.json");
 const RESPONSES_FILE = path.join(DATA_DIR, "nps_responses.json");
 const CYCLES_FILE = path.join(DATA_DIR, "nps_cycles.json");
+const CONFIG_FILE = path.join(DATA_DIR, "config.json");
 
 // ── Data helpers ──────────────────────────────────────────────────────────────
 
@@ -34,6 +35,11 @@ const readCycles = () => readJSON(CYCLES_FILE);
 const saveTokens = (d) => writeJSON(TOKENS_FILE, d);
 const saveResponses = (d) => writeJSON(RESPONSES_FILE, d);
 const saveCycles = (d) => writeJSON(CYCLES_FILE, d);
+
+function readConfig() {
+  try { return JSON.parse(fs.readFileSync(CONFIG_FILE, "utf-8")); } catch { return {}; }
+}
+function saveConfig(d) { fs.writeFileSync(CONFIG_FILE, JSON.stringify(d, null, 2), "utf-8"); }
 
 function parseBody(req) {
   return new Promise((resolve) => {
@@ -113,21 +119,86 @@ function proxyTaskrow(req, res, rawUrl) {
 // ── Analytics API ─────────────────────────────────────────────────────────────
 
 const ANALYTICS_CACHE_TTL = 5 * 60 * 1000; // 5 min
+const TASKS_FILE = path.join(DATA_DIR, "tasks.json");
 let analyticsCache = null; // { data, generatedAt }
+let tasksFetchPromise = null; // previne fetches concorrentes
+
+/**
+ * Busca todas as tasks da Taskrow com paginação e salva em data/tasks.json.
+ * Usa janela de 12 meses para dados históricos suficientes para a análise preditiva.
+ * Deduplicado: se já há um fetch em andamento, aguarda o mesmo.
+ */
+function fetchTasksFromTaskrow(apiKey) {
+  if (tasksFetchPromise) return tasksFetchPromise;
+
+  tasksFetchPromise = new Promise((resolve, reject) => {
+    const TASKROW_HOST = "crtcomunicacao.taskrow.com";
+    const API_PATH = "/api/v2/search/tasks/advancedsearch";
+    const endDate = new Date();
+    const startDate = new Date();
+    startDate.setFullYear(startDate.getFullYear() - 1);
+    const fmt = (d) => d.toISOString().slice(0, 10);
+
+    const allTasks = [];
+    let offset = 0;
+
+    const fetchPage = () => {
+      const bodyStr = JSON.stringify({ StartDate: fmt(startDate), EndDate: fmt(endDate), Offset: offset });
+      const req = https.request(
+        {
+          hostname: TASKROW_HOST,
+          port: 443,
+          path: API_PATH,
+          method: "POST",
+          headers: {
+            "__identifier": apiKey,
+            "Content-Type": "application/json",
+            "Content-Length": Buffer.byteLength(bodyStr),
+          },
+        },
+        (proxyRes) => {
+          const chunks = [];
+          proxyRes.on("data", (d) => chunks.push(d));
+          proxyRes.on("end", () => {
+            try {
+              const json = JSON.parse(Buffer.concat(chunks).toString("utf-8"));
+              if (proxyRes.statusCode === 401 || proxyRes.statusCode === 403) {
+                return reject(new Error("API key inválida ou sem permissão no Taskrow."));
+              }
+              const page = json.data || [];
+              allTasks.push(...page);
+              console.log(`[taskrow] offset=${offset} → ${page.length} tasks (total: ${allTasks.length})`);
+              if (json.nextOffset && page.length >= 200) {
+                offset = json.nextOffset;
+                fetchPage();
+              } else {
+                fs.writeFileSync(TASKS_FILE, JSON.stringify(allTasks, null, 2), "utf-8");
+                console.log(`[taskrow] Salvo ${allTasks.length} tasks em data/tasks.json`);
+                analyticsCache = null; // invalida cache para forçar re-análise
+                resolve(allTasks.length);
+              }
+            } catch (e) {
+              reject(new Error(`Erro ao processar resposta da Taskrow: ${e.message}`));
+            }
+          });
+        }
+      );
+      req.on("error", reject);
+      req.write(bodyStr);
+      req.end();
+    };
+
+    fetchPage();
+  }).finally(() => { tasksFetchPromise = null; });
+
+  return tasksFetchPromise;
+}
 
 function runAnalyticsPipeline() {
   return new Promise((resolve, reject) => {
-    const tasksFile = path.join(DATA_DIR, "tasks.json");
-    const args = ["-m", "analytics.main"];
-    if (fs.existsSync(tasksFile)) {
-      args.push("--demands", tasksFile);
-    } else {
-      args.push("--synthetic");
-    }
+    const args = ["-m", "analytics.main", "--demands", TASKS_FILE];
     const npsFile = path.join(DATA_DIR, "nps_responses.json");
-    if (fs.existsSync(npsFile)) {
-      args.push("--nps", npsFile);
-    }
+    if (fs.existsSync(npsFile)) args.push("--nps", npsFile);
 
     const stdoutChunks = [];
     const stderrChunks = [];
@@ -137,28 +208,75 @@ function runAnalyticsPipeline() {
     proc.on("close", (code) => {
       const stdout = Buffer.concat(stdoutChunks).toString("utf-8");
       const stderr = Buffer.concat(stderrChunks).toString("utf-8");
-      if (code !== 0) return reject(new Error(`Analytics process exited ${code}: ${stderr}`));
-      try {
-        resolve(JSON.parse(stdout));
-      } catch (e) {
-        reject(new Error(`Analytics output is not valid JSON: ${e.message}`));
-      }
+      if (code !== 0) return reject(new Error(`Pipeline analytics falhou (código ${code}): ${stderr}`));
+      try { resolve(JSON.parse(stdout)); }
+      catch (e) { reject(new Error(`Output do analytics não é JSON válido: ${e.message}`)); }
     });
     proc.on("error", reject);
   });
 }
 
 async function handleAnalyticsApi(req, res, urlPath, method) {
-  // POST /api/analytics/refresh — força re-execução
-  if (urlPath === "/api/analytics/refresh" && method === "POST") {
-    analyticsCache = null;
+  // ── POST /api/config — salva API key no servidor ───────────────────────────
+  if (urlPath === "/api/config" && method === "POST") {
+    const body = await parseBody(req);
+    const cfg = readConfig();
+    if (body.taskrowApiKey !== undefined) {
+      cfg.taskrowApiKey = body.taskrowApiKey;
+      saveConfig(cfg);
+      console.log("[config] API key do Taskrow atualizada.");
+      // Se não tem tasks.json ainda, dispara fetch em background
+      if (cfg.taskrowApiKey && !fs.existsSync(TASKS_FILE)) {
+        fetchTasksFromTaskrow(cfg.taskrowApiKey).catch((e) =>
+          console.error("[taskrow] Fetch background falhou:", e.message)
+        );
+      }
+    }
+    return sendJson(res, 200, { ok: true });
   }
 
+  // ── POST /api/analytics/refresh — força re-fetch da Taskrow + re-análise ──
+  if (urlPath === "/api/analytics/refresh" && method === "POST") {
+    analyticsCache = null;
+    const body = await parseBody(req);
+    const apiKey = body.apiKey || req.headers["x-taskrow-key"] || readConfig().taskrowApiKey || "";
+    if (!apiKey) {
+      return sendJson(res, 400, { error: "API key não configurada. Configure em Ajustes." });
+    }
+    // Salva key para uso futuro
+    const cfg = readConfig();
+    cfg.taskrowApiKey = apiKey;
+    saveConfig(cfg);
+    try {
+      await fetchTasksFromTaskrow(apiKey);
+    } catch (err) {
+      console.error("[analytics] Refresh falhou:", err.message);
+      return sendJson(res, 500, { error: err.message });
+    }
+  }
+
+  // ── GET /api/analytics ou retorno após refresh ─────────────────────────────
   if (urlPath === "/api/analytics" || urlPath === "/api/analytics/refresh") {
     const now = Date.now();
     if (analyticsCache && now - analyticsCache.generatedAt < ANALYTICS_CACHE_TTL) {
       return sendJson(res, 200, analyticsCache.data);
     }
+
+    // Se tasks.json não existe, tenta buscar automaticamente com a key salva
+    if (!fs.existsSync(TASKS_FILE)) {
+      const storedKey = readConfig().taskrowApiKey;
+      if (!storedKey) {
+        return sendJson(res, 200, { needs_refresh: true, no_key: true });
+      }
+      console.log("[analytics] tasks.json ausente — buscando da Taskrow automaticamente...");
+      try {
+        await fetchTasksFromTaskrow(storedKey);
+      } catch (err) {
+        console.error("[analytics] Auto-fetch falhou:", err.message);
+        return sendJson(res, 200, { needs_refresh: true, fetch_error: err.message });
+      }
+    }
+
     try {
       const data = await runAnalyticsPipeline();
       analyticsCache = { data, generatedAt: now };
@@ -170,6 +288,17 @@ async function handleAnalyticsApi(req, res, urlPath, method) {
   }
 
   return sendJson(res, 404, { error: "Endpoint não encontrado" });
+}
+
+// Na inicialização: se já tem key salva mas não tem tasks.json → busca em background
+{
+  const cfg = readConfig();
+  if (cfg.taskrowApiKey && !fs.existsSync(TASKS_FILE)) {
+    console.log("[startup] Iniciando fetch de tasks da Taskrow em background...");
+    fetchTasksFromTaskrow(cfg.taskrowApiKey).catch((e) =>
+      console.error("[startup] Fetch inicial falhou:", e.message)
+    );
+  }
 }
 
 // ── NPS API ───────────────────────────────────────────────────────────────────
@@ -286,6 +415,12 @@ const server = http.createServer(async (req, res) => {
   const method = (req.method ?? "GET").toUpperCase();
 
   try {
+    // Config API (API key server-side)
+    if (urlPath === "/api/config") {
+      await handleAnalyticsApi(req, res, urlPath, method);
+      return;
+    }
+
     // Analytics API
     if (urlPath.startsWith("/api/analytics")) {
       await handleAnalyticsApi(req, res, urlPath, method);
@@ -330,6 +465,7 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
+server.setTimeout(10 * 60 * 1000); // 10 min — fetch paginado da Taskrow pode demorar
 server.listen(PORT, () => {
   console.log(`CRTTask running on http://localhost:${PORT}`);
 });

@@ -72,7 +72,7 @@ def load_demands(path: str | Path) -> pd.DataFrame:
 
     Schema de saída normalizado:
         demand_id, client_id, client_name, created_at, delivered_at,
-        deadline, status, assigned_user_id, category
+        deadline, status, assigned_user_id, assigned_user_name, category
     """
     with open(path, encoding="utf-8") as f:
         raw: list[dict] = json.load(f)
@@ -86,10 +86,15 @@ def load_demands(path: str | Path) -> pd.DataFrame:
         deadline = pd.to_datetime(t.get("dueDate") or t.get("deadline"), utc=False, errors="coerce")
         closed = bool(t.get("closed", False))
 
-        # Normaliza timezone-aware → naive
-        for col in (created, delivered, deadline):
-            if col is not pd.NaT and hasattr(col, "tz") and col.tz is not None:
-                col = col.tz_localize(None)
+        # Normaliza timezone-aware → naive (atribuição direta, não via loop)
+        def _strip_tz(ts):
+            if ts is pd.NaT or not isinstance(ts, pd.Timestamp):
+                return ts
+            return ts.tz_localize(None) if ts.tzinfo is not None else ts
+
+        created = _strip_tz(created)
+        delivered = _strip_tz(delivered)
+        deadline = _strip_tz(deadline)
 
         # Status
         if closed:
@@ -113,6 +118,7 @@ def load_demands(path: str | Path) -> pd.DataFrame:
                 "deadline": deadline,
                 "status": status,
                 "assigned_user_id": str(t.get("ownerUserID") or t.get("assigned_user_id", "")),
+                "assigned_user_name": t.get("ownerUserLogin") or t.get("assigned_user_name", ""),
                 "category": t.get("pipelineStep") or t.get("category") or "",
             }
         )
@@ -125,18 +131,43 @@ def load_demands(path: str | Path) -> pd.DataFrame:
 
 # ── Dados sintéticos para teste ───────────────────────────────────────────────
 
+_DEFAULT_CLIENT_NAMES = [
+    "Agência Vértice", "Grupo Meridiano", "Studio Âncora", "Criativa360",
+    "Impulso Digital", "Nexo Comunicação", "Alfa Mídia", "Bravo Conteúdo",
+    "Delta Branding", "Epsilon Publicidade", "Zeta Creative", "Eta Produções",
+    "Theta Marketing", "Iota Estratégia", "Kappa Projetos",
+]
+
+_DEFAULT_USER_NAMES = [
+    "ana_lima", "carlos_souza", "fernanda_reis", "gabriel_mota",
+    "helena_dias", "igor_nunes", "julia_faro", "lucas_pinto",
+]
+
+
 def generate_synthetic_data(
     n_clients: int = 15,
     n_demands_per_client: int = 60,
     n_nps_per_client: int = 6,
     seed: int = 42,
+    client_names: list[str] | None = None,
+    user_names: list[str] | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
     Gera dados sintéticos realistas para desenvolvimento/teste.
     Simula diferentes perfis de clientes (saudável, atenção, risco).
+
+    Args:
+        client_names: lista com nomes reais dos clientes. Se None, usa nomes
+                      fictícios padrão. Comprimento não precisa bater com
+                      n_clients — os nomes são ciclados se necessário.
+        user_names:   lista com logins/nomes reais dos colaboradores. Se None,
+                      usa nomes fictícios padrão.
     """
     rng = np.random.default_rng(seed)
     now = datetime.now()
+
+    names = list(client_names) if client_names else _DEFAULT_CLIENT_NAMES
+    users_pool = list(user_names) if user_names else _DEFAULT_USER_NAMES
 
     client_profiles = []
     for i in range(n_clients):
@@ -146,7 +177,7 @@ def generate_synthetic_data(
         client_profiles.append(
             {
                 "client_id": f"client_{i+1:03d}",
-                "client_name": f"Empresa {i+1}",
+                "client_name": names[i % len(names)],
                 "late_rate": late_rate + rng.normal(0, 0.05),
                 "base_nps": base_nps + rng.normal(0, 0.5),
                 "trend": rng.choice([-0.3, 0.0, 0.3], p=[0.3, 0.4, 0.3]),
@@ -155,7 +186,7 @@ def generate_synthetic_data(
 
     demand_rows = []
     for cp in client_profiles:
-        users = [f"user_{j}" for j in rng.integers(1, 8, size=3)]
+        users = rng.choice(users_pool, size=min(3, len(users_pool)), replace=False).tolist()
         for k in range(n_demands_per_client):
             created = now - timedelta(days=int(rng.integers(1, 180)))
             avg_delivery = 5 + rng.exponential(3)

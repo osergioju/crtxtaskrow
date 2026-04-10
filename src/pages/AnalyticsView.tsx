@@ -1,7 +1,7 @@
 import { useState } from "react";
 import {
   AlertTriangle, TrendingDown, TrendingUp, Minus, RefreshCw,
-  Users, ShieldAlert, Activity, Star, ChevronDown, ChevronUp, Info,
+  Users, ShieldAlert, Star, ChevronDown, ChevronUp, Info, Database, Loader2,
 } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
@@ -14,6 +14,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { useAnalytics, useRefreshAnalytics } from "@/hooks/useAnalytics";
+import type { AnalyticsResult } from "@/types/analytics";
 import type { AnalyticsAlert, AnalyticsClient, AnalyticsInsight, EmployeeRanking } from "@/types/analytics";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -390,8 +391,13 @@ export default function AnalyticsView() {
   const { data, isLoading, isError, error } = useAnalytics();
   const refresh = useRefreshAnalytics();
 
-  const generatedAt = data?.generated_at
-    ? new Date(data.generated_at).toLocaleString("pt-BR")
+  const needsRefresh = data && "needs_refresh" in data && data.needs_refresh;
+  const noKey = needsRefresh && (data as any).no_key;
+  const fetchError = needsRefresh && (data as any).fetch_error;
+  const result = (!needsRefresh && data) ? data as AnalyticsResult : null;
+
+  const generatedAt = result?.generated_at
+    ? new Date(result.generated_at).toLocaleString("pt-BR")
     : null;
 
   return (
@@ -423,6 +429,51 @@ export default function AnalyticsView() {
       <div className="mt-4 space-y-5">
         {isLoading && <LoadingSkeleton />}
 
+        {/* Servidor buscando dados da Taskrow pela primeira vez */}
+        {!isLoading && needsRefresh && !noKey && !fetchError && (
+          <Card className="border-blue-200 bg-blue-50">
+            <CardContent className="py-10 text-center">
+              <Loader2 className="mx-auto h-8 w-8 text-blue-400 mb-3 animate-spin" />
+              <p className="text-sm font-semibold text-blue-700">Buscando dados do Taskrow...</p>
+              <p className="text-xs text-blue-600 mt-1">
+                Primeira carga — importando todas as tarefas. Clique em Atualizar quando terminar.
+              </p>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Sem API key configurada no servidor */}
+        {!isLoading && noKey && (
+          <Card className="border-amber-200 bg-amber-50">
+            <CardContent className="py-10 text-center">
+              <Database className="mx-auto h-8 w-8 text-amber-400 mb-3" />
+              <p className="text-sm font-semibold text-amber-700">API Key não configurada</p>
+              <p className="text-xs text-amber-600 mt-1 max-w-sm mx-auto">
+                Configure sua API Key do Taskrow (ícone de chave no menu) e clique em Atualizar.
+              </p>
+              <Button size="sm" className="mt-4 gap-1.5" onClick={() => refresh.mutate()} disabled={refresh.isPending}>
+                <RefreshCw className={`h-3.5 w-3.5 ${refresh.isPending ? "animate-spin" : ""}`} />
+                {refresh.isPending ? "Buscando…" : "Atualizar agora"}
+              </Button>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Erro no fetch da Taskrow */}
+        {!isLoading && fetchError && (
+          <Card className="border-red-200 bg-red-50">
+            <CardContent className="py-6 text-center">
+              <AlertTriangle className="mx-auto h-8 w-8 text-red-400 mb-2" />
+              <p className="text-sm font-semibold text-red-700">Erro ao buscar dados do Taskrow</p>
+              <p className="text-xs text-red-600 mt-1">{fetchError}</p>
+              <Button size="sm" variant="outline" className="mt-3 gap-1.5" onClick={() => refresh.mutate()} disabled={refresh.isPending}>
+                <RefreshCw className={`h-3.5 w-3.5 ${refresh.isPending ? "animate-spin" : ""}`} />
+                Tentar novamente
+              </Button>
+            </CardContent>
+          </Card>
+        )}
+
         {isError && (
           <Card className="border-red-200 bg-red-50">
             <CardContent className="py-6 text-center">
@@ -436,28 +487,28 @@ export default function AnalyticsView() {
           </Card>
         )}
 
-        {data && (
+        {result && (
           <>
             {/* Summary */}
-            <SummaryCards summary={data.summary} />
+            <SummaryCards summary={result.summary} />
 
             <Tabs defaultValue="overview">
               <TabsList className="h-8 text-xs">
                 <TabsTrigger value="overview" className="text-xs">Visão Geral</TabsTrigger>
                 <TabsTrigger value="clientes" className="text-xs">
                   Clientes
-                  {data.summary.critical > 0 && (
+                  {result.summary.critical > 0 && (
                     <Badge variant="destructive" className="ml-1.5 h-4 px-1 text-[0.6rem]">
-                      {data.summary.critical}
+                      {result.summary.critical}
                     </Badge>
                   )}
                 </TabsTrigger>
                 <TabsTrigger value="colaboradores" className="text-xs">Colaboradores</TabsTrigger>
                 <TabsTrigger value="alertas" className="text-xs">
                   Alertas
-                  {data.summary.critical_alerts > 0 && (
+                  {result.summary.critical_alerts > 0 && (
                     <Badge variant="destructive" className="ml-1.5 h-4 px-1 text-[0.6rem]">
-                      {data.summary.critical_alerts}
+                      {result.summary.critical_alerts}
                     </Badge>
                   )}
                 </TabsTrigger>
@@ -472,7 +523,7 @@ export default function AnalyticsView() {
                       <CardTitle className="text-sm font-semibold">Ranking de Saúde dos Clientes</CardTitle>
                     </CardHeader>
                     <CardContent className="px-2 pb-3">
-                      <HealthBarChart clients={data.clients} />
+                      <HealthBarChart clients={result.clients} />
                     </CardContent>
                   </Card>
 
@@ -481,20 +532,20 @@ export default function AnalyticsView() {
                       <CardTitle className="text-sm font-semibold">NPS vs Taxa de Atraso</CardTitle>
                     </CardHeader>
                     <CardContent className="px-2 pb-3">
-                      <NpsScatterChart clients={data.clients} />
+                      <NpsScatterChart clients={result.clients} />
                     </CardContent>
                   </Card>
                 </div>
 
                 {/* Top correlations */}
-                {data.correlations.details.length > 0 && (
+                {result.correlations.details.length > 0 && (
                   <Card>
                     <CardHeader className="pb-2 pt-4 px-4">
                       <CardTitle className="text-sm font-semibold">Correlações com NPS</CardTitle>
                     </CardHeader>
                     <CardContent className="px-4 pb-4">
                       <div className="space-y-2">
-                        {data.correlations.details.filter((d) => d.significant).slice(0, 5).map((c) => (
+                        {result.correlations.details.filter((d) => d.significant).slice(0, 5).map((c) => (
                           <div key={c.feature} className="flex items-center gap-3">
                             <div className="w-40 shrink-0">
                               <p className="text-xs font-medium truncate">{c.label}</p>
@@ -511,7 +562,7 @@ export default function AnalyticsView() {
                             </span>
                           </div>
                         ))}
-                        {data.correlations.details.every((d) => !d.significant) && (
+                        {result.correlations.details.every((d) => !d.significant) && (
                           <p className="text-xs text-muted-foreground">Dados insuficientes para correlações estatisticamente significativas.</p>
                         )}
                       </div>
@@ -524,7 +575,7 @@ export default function AnalyticsView() {
               <TabsContent value="clientes" className="mt-4">
                 <Card>
                   <CardContent className="px-4 py-4">
-                    <ClientTable clients={data.clients} />
+                    <ClientTable clients={result.clients} />
                   </CardContent>
                 </Card>
               </TabsContent>
@@ -534,30 +585,30 @@ export default function AnalyticsView() {
                 <Card>
                   <CardHeader className="pb-2 pt-4 px-4">
                     <CardTitle className="text-sm font-semibold">
-                      Ranking de Performance — {data.rankings.employees.length} colaboradores
+                      Ranking de Performance — {result.rankings.employees.length} colaboradores
                     </CardTitle>
                   </CardHeader>
                   <CardContent className="px-4 pb-4">
-                    <EmployeeTable employees={data.rankings.employees} />
+                    <EmployeeTable employees={result.rankings.employees} />
                   </CardContent>
                 </Card>
               </TabsContent>
 
               {/* ── Alertas ── */}
               <TabsContent value="alertas" className="mt-4">
-                <AlertsSection alerts={data.alerts} />
+                <AlertsSection alerts={result.alerts} />
               </TabsContent>
 
               {/* ── Insights ── */}
               <TabsContent value="insights" className="mt-4 space-y-2">
-                {data.insights.length === 0 ? (
+                {result.insights.length === 0 ? (
                   <Card>
                     <CardContent className="py-8 text-center text-sm text-muted-foreground">
                       Nenhum insight gerado ainda.
                     </CardContent>
                   </Card>
                 ) : (
-                  data.insights.map((insight, i) => <InsightItem key={i} insight={insight} />)
+                  result.insights.map((insight, i) => <InsightItem key={i} insight={insight} />)
                 )}
               </TabsContent>
             </Tabs>

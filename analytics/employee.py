@@ -55,9 +55,20 @@ def compute_employee_stats(
     results = []
     users = d["assigned_user_id"].dropna().unique()
 
+    # Monta mapa id → nome real (ownerUserLogin vindo da Taskrow)
+    name_map = {}
+    if "assigned_user_name" in d.columns:
+        name_map = (
+            d[d["assigned_user_name"].notna() & (d["assigned_user_name"] != "")]
+            .drop_duplicates("assigned_user_id")
+            .set_index("assigned_user_id")["assigned_user_name"]
+            .to_dict()
+        )
+
     for uid in sorted(users):
         ud = d[d["assigned_user_id"] == uid]
-        stats = _calc_user(uid, ud, nps_avg)
+        display = name_map.get(uid, uid)
+        stats = _calc_user(uid, display, ud, nps_avg)
         results.append(stats)
 
     # Ranqueia por performance_score desc
@@ -69,7 +80,7 @@ def compute_employee_stats(
     return results
 
 
-def _calc_user(uid: str, ud: pd.DataFrame, nps_avg: pd.Series) -> EmployeeStats:
+def _calc_user(uid: str, display: str, ud: pd.DataFrame, nps_avg: pd.Series) -> EmployeeStats:
     closed = ud[ud["status"].isin(["on_time", "late"])]
     late = ud[ud["status"] == "late"]
     on_time = ud[ud["status"] == "on_time"]
@@ -105,7 +116,7 @@ def _calc_user(uid: str, ud: pd.DataFrame, nps_avg: pd.Series) -> EmployeeStats:
 
     return EmployeeStats(
         user_id=uid,
-        display_name=uid,
+        display_name=display,
         total_demands=total,
         late_demands=n_late,
         late_ratio=round(late_ratio, 4),
