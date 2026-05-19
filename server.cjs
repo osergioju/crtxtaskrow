@@ -269,30 +269,41 @@ function serveFile(res, filePath) {
 function proxyTaskrow(req, res, rawUrl) {
   const targetPath = rawUrl.replace(/^\/taskrow-api/, "") || "/";
   const apiKey = readConfig().taskrowApiKey || req.headers["__identifier"] || "";
-  const headers = Object.assign({}, req.headers, {
-    host: "crtcomunicacao.taskrow.com",
-    "__identifier": apiKey,
-  });
-  delete headers["content-length"];
 
-  const proxyReq = https.request(
-    {
-      hostname: "crtcomunicacao.taskrow.com",
-      port: 443,
-      path: targetPath,
-      method: req.method,
-      headers,
-    },
-    (proxyRes) => {
-      res.writeHead(proxyRes.statusCode || 200, proxyRes.headers);
-      proxyRes.pipe(res, { end: true });
-    }
-  );
-  proxyReq.on("error", (err) => {
-    console.error("[proxy]", err.message);
-    if (!res.headersSent) sendJson(res, 502, { error: "Proxy error" });
+  const chunks = [];
+  req.on("data", (d) => chunks.push(d));
+  req.on("end", () => {
+    const body = Buffer.concat(chunks);
+    const headers = {
+      "host": "crtcomunicacao.taskrow.com",
+      "content-type": req.headers["content-type"] || "application/json",
+      "content-length": String(body.length),
+      "__identifier": apiKey,
+    };
+
+    const proxyReq = https.request(
+      {
+        hostname: "crtcomunicacao.taskrow.com",
+        port: 443,
+        path: targetPath,
+        method: req.method,
+        headers,
+      },
+      (proxyRes) => {
+        res.writeHead(proxyRes.statusCode || 200, {
+          "content-type": proxyRes.headers["content-type"] || "application/json",
+          "access-control-allow-origin": "*",
+        });
+        proxyRes.pipe(res, { end: true });
+      }
+    );
+    proxyReq.on("error", (err) => {
+      console.error("[proxy]", err.message);
+      if (!res.headersSent) sendJson(res, 502, { error: "Proxy error" });
+    });
+    proxyReq.write(body);
+    proxyReq.end();
   });
-  req.pipe(proxyReq, { end: true });
 }
 
 // ── Analytics API ─────────────────────────────────────────────────────────────
