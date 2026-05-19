@@ -11,6 +11,27 @@ const PORT = Number(process.env.PORT) || 8080;
 const DIST_DIR = path.resolve(__dirname, "dist");
 const DATA_DIR = path.resolve(__dirname, "data");
 
+// ── Supabase config (pipeline history) ───────────────────────────────────────
+const SUPABASE_URL   = (process.env.VITE_SUPABASE_URL || "https://ysnbynpxjmumabgxuoau.supabase.co").replace(/\/$/, "");
+const SUPABASE_KEY   = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+const SUPABASE_HOST  = SUPABASE_URL.replace("https://", "");
+
+// Steps que indicam que a tarefa está parada aguardando o cliente
+const CLIENT_BLOCKING_STEPS = [
+  "aprovação do cliente",
+  "aprovação externa",
+  "aguardando cliente",
+  "aguardando aprovação",
+  "aguardando insumo",
+];
+
+function isClientBlocking(step) {
+  const s = (step || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+  return CLIENT_BLOCKING_STEPS.some(b =>
+    s.includes(b.normalize("NFD").replace(/[̀-ͯ]/g, ""))
+  );
+}
+
 const TOKENS_FILE = path.join(DATA_DIR, "nps_tokens.json");
 const RESPONSES_FILE = path.join(DATA_DIR, "nps_responses.json");
 const CYCLES_FILE = path.join(DATA_DIR, "nps_cycles.json");
@@ -58,6 +79,160 @@ function currentQuarterLabel() {
   const now = new Date();
   const q = Math.ceil((now.getMonth() + 1) / 3);
   return `Q${q}/${now.getFullYear()}`;
+}
+
+// ── Pipeline history sync ─────────────────────────────────────────────────────
+
+/** Faz uma chamada REST ao Supabase. Retorna o body parseado ou null. */
+async function sbReq(method, table, body, qs) {
+  const qStr = qs ? "?" + new URLSearchParams(qs).toString() : "";
+  const bodyStr = body ? JSON.stringify(body) : null;
+
+  const headers = {
+    "apikey":        SUPABASE_KEY,
+    "Authorization": `Bearer ${SUPABASE_KEY}`,
+    "Content-Type":  "application/json",
+  };
+  if (method === "POST")  headers["Prefer"] = "resolution=merge-duplicates,return=minimal";
+  if (method === "PATCH") headers["Prefer"] = "return=minimal";
+  if (bodyStr) headers["Content-Length"] = String(Buffer.byteLength(bodyStr));
+
+  return new Promise((resolve, reject) => {
+    const req = https.request({
+      hostname: SUPABASE_HOST,
+      port: 443,
+      path: `/rest/v1/${table}${qStr}`,
+      method,
+      headers,
+    }, (res) => {
+      const chunks = [];
+      res.on("data", d => chunks.push(d));
+      res.on("end", () => {
+        const text = Buffer.concat(chunks).toString("utf-8");
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          resolve(text ? JSON.parse(text) : null);
+        } else {
+          reject(new Error(`Supabase ${method} /${table}: ${res.statusCode} — ${text.slice(0, 200)}`));
+        }
+      });
+    });
+    req.on("error", reject);
+    if (bodyStr) req.write(bodyStr);
+    req.end();
+  });
+}
+
+/** Busca todas as linhas de uma tabela com paginação (até 100 k linhas). */
+async function sbFetchAll(table, select) {
+  const PAGE = 1000;
+  let offset = 0;
+  const all = [];
+  while (true) {
+    const rows = await sbReq("GET", table, null, {
+      select,
+      limit:  String(PAGE),
+      offset: String(offset),
+    });
+    if (!Array.isArray(rows) || !rows.length) break;
+    all.push(...rows);
+    if (rows.length < PAGE) break;
+    offset += PAGE;
+  }
+  return all;
+}
+
+/** Envia rows em lotes de `size` para não exceder o limite de payload. */
+async function sbBatch(method, table, rows, size = 500) {
+  for (let i = 0; i < rows.length; i += size) {
+    await sbReq(method, table, rows.slice(i, i + size));
+  }
+}
+
+/**
+ * Compara as tasks recém-buscadas contra os snapshots armazenados no Supabase.
+ * Grava no Supabase apenas as mudanças de pipelineStep detectadas.
+ *
+ * Fluxo:
+ *   1. Lê todos os snapshots existentes
+ *   2. Para cada task:
+ *      - nova: cria snapshot + primeira entrada no histórico
+ *      - step mudou: fecha a entrada aberta + cria nova + atualiza snapshot
+ *      - sem mudança: ignora
+ *   3. Persiste tudo em batch
+ */
+async function syncPipelineHistory(tasks) {
+  if (!SUPABASE_KEY) {
+    console.log("[pipeline] SUPABASE_SERVICE_ROLE_KEY não configurado — histórico desabilitado.");
+    return;
+  }
+
+  const now = new Date().toISOString();
+
+  // 1. Carrega snapshots existentes
+  const snapshots = await sbFetchAll("pipeline_snapshots", "task_id,pipeline_step");
+  const snapshotMap = new Map(snapshots.map(s => [s.task_id, s.pipeline_step]));
+  console.log(`[pipeline] ${snapshotMap.size} snapshots carregados, ${tasks.length} tasks para comparar.`);
+
+  const newSnapshots = [];   // upsert
+  const closedTaskIds = [];  // fechar entradas abertas
+  const newHistory = [];     // novas entradas de histórico
+
+  for (const task of tasks) {
+    const step = task.pipelineStep || "";
+    const prevStep = snapshotMap.get(task.taskID);
+
+    if (prevStep === undefined) {
+      // Task nova: snapshot + entrada inicial (entered_at = criação da tarefa)
+      newSnapshots.push({ task_id: task.taskID, pipeline_step: step, updated_at: now });
+      newHistory.push({
+        task_id: task.taskID,
+        pipeline_step: step,
+        entered_at: task.creationDate || now,
+        exited_at: task.closed ? (task.closeDate || now) : null,
+        is_client_blocking: isClientBlocking(step),
+      });
+    } else if (prevStep !== step) {
+      // Step mudou: fecha a entrada aberta e abre nova
+      closedTaskIds.push(task.taskID);
+      newSnapshots.push({ task_id: task.taskID, pipeline_step: step, updated_at: now });
+      newHistory.push({
+        task_id: task.taskID,
+        pipeline_step: step,
+        entered_at: now,
+        exited_at: task.closed ? (task.closeDate || now) : null,
+        is_client_blocking: isClientBlocking(step),
+      });
+    }
+  }
+
+  // 2. Fecha entradas abertas dos tasks que mudaram de step
+  if (closedTaskIds.length) {
+    // Processa em lotes de 200 IDs para não exceder o limite de URL
+    const CLOSE_BATCH = 200;
+    for (let i = 0; i < closedTaskIds.length; i += CLOSE_BATCH) {
+      const ids = closedTaskIds.slice(i, i + CLOSE_BATCH).join(",");
+      await sbReq("PATCH", `pipeline_history?task_id=in.(${ids})&exited_at=is.null`,
+        { exited_at: now }
+      );
+    }
+    console.log(`[pipeline] ${closedTaskIds.length} entradas abertas fechadas.`);
+  }
+
+  // 3. Upsert snapshots
+  if (newSnapshots.length) {
+    await sbBatch("POST", "pipeline_snapshots", newSnapshots);
+    console.log(`[pipeline] ${newSnapshots.length} snapshots atualizados.`);
+  }
+
+  // 4. Insere novas entradas de histórico
+  if (newHistory.length) {
+    await sbBatch("POST", "pipeline_history", newHistory);
+    console.log(`[pipeline] ${newHistory.length} novas entradas de histórico inseridas.`);
+  }
+
+  if (!newSnapshots.length && !closedTaskIds.length) {
+    console.log("[pipeline] Nenhuma mudança de pipeline detectada.");
+  }
 }
 
 // ── Static file serving ───────────────────────────────────────────────────────
@@ -175,6 +350,12 @@ function fetchTasksFromTaskrow(apiKey) {
                 fs.writeFileSync(TASKS_FILE, JSON.stringify(allTasks, null, 2), "utf-8");
                 console.log(`[taskrow] Salvo ${allTasks.length} tasks em data/tasks.json`);
                 analyticsCache = null; // invalida cache para forçar re-análise
+
+                // Sync histórico de pipeline em background — nunca bloqueia o fluxo principal
+                syncPipelineHistory(allTasks).catch(e =>
+                  console.error("[pipeline] Sync falhou (não crítico):", e.message)
+                );
+
                 resolve(allTasks.length);
               }
             } catch (e) {

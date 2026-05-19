@@ -14,7 +14,45 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      pipeline_history: {
+        Row: {
+          id: string;
+          task_id: number;
+          pipeline_step: string;
+          entered_at: string;
+          exited_at: string | null;
+          is_client_blocking: boolean;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          task_id: number;
+          pipeline_step: string;
+          entered_at: string;
+          exited_at?: string | null;
+          is_client_blocking?: boolean;
+          created_at?: string;
+        };
+        Update: {
+          exited_at?: string | null;
+        };
+      };
+      pipeline_snapshots: {
+        Row: {
+          task_id: number;
+          pipeline_step: string;
+          updated_at: string;
+        };
+        Insert: {
+          task_id: number;
+          pipeline_step: string;
+          updated_at?: string;
+        };
+        Update: {
+          pipeline_step?: string;
+          updated_at?: string;
+        };
+      };
     }
     Views: {
       [_ in never]: never

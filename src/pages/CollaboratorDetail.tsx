@@ -24,8 +24,10 @@ import { StatusBadge } from "@/components/shared/StatusBadge";
 import { SLAValue } from "@/components/shared/SLAValue";
 import { useAllTasks } from "@/hooks/useAllTasks";
 import { useUsers } from "@/hooks/useUsers";
+import { usePipelineHistory } from "@/hooks/usePipelineHistory";
 import { classifyTask, getStatusColor, getStatusLabel } from "@/lib/classifyTask";
 import { calcSLA, calcSLATrend } from "@/lib/sla";
+import { calcAggregateSLASplit } from "@/lib/slaActive";
 import { taskrowLink } from "@/lib/taskrowLink";
 import type { TaskrowTask, TaskStatus } from "@/types/taskrow";
 
@@ -38,6 +40,14 @@ export default function CollaboratorDetail() {
 
   const user = useMemo(() => users?.find((u: any) => u.UserID === userID), [users, userID]);
   const tasks = useMemo(() => allTasks?.filter(t => t.ownerUserID === userID) || [], [allTasks, userID]);
+
+  const taskIds = useMemo(() => tasks.map(t => t.taskID), [tasks]);
+  const { data: pipelineHistory } = usePipelineHistory(taskIds);
+
+  const slaSplit = useMemo(
+    () => calcAggregateSLASplit(taskIds, pipelineHistory || []),
+    [taskIds, pipelineHistory]
+  );
 
   const counts = useMemo(() => {
     const c: Record<TaskStatus, number> = { andamento: 0, backlog: 0, atraso: 0, atraso_cliente: 0, em_dia: 0, retrabalho: 0, urgente: 0, concluida: 0 };
@@ -258,6 +268,44 @@ export default function CollaboratorDetail() {
                 <p className="text-2xl font-bold"><SLAValue days={slaAvg} /></p>
               </CardHeader>
               <CardContent>
+                {slaSplit.hasData && (
+                  <div className="mb-4 grid grid-cols-2 gap-3 rounded-xl border bg-muted/30 p-3">
+                    <div className="space-y-0.5">
+                      <p className="text-[0.6rem] font-semibold uppercase tracking-wider text-muted-foreground">Tempo Ativo</p>
+                      <p className="text-xl font-bold text-primary">{slaSplit.tempoAtivo}d</p>
+                      <p className="text-[0.65rem] text-muted-foreground">colaborador produzindo</p>
+                    </div>
+                    <div className="space-y-0.5">
+                      <p className="text-[0.6rem] font-semibold uppercase tracking-wider text-muted-foreground">Ag. Cliente</p>
+                      <p className="text-xl font-bold text-status-atraso-cliente">{slaSplit.tempoParado}d</p>
+                      <p className="text-[0.65rem] text-muted-foreground">aguardando aprovação</p>
+                    </div>
+                    <div className="col-span-2">
+                      <div className="flex h-2 w-full overflow-hidden rounded-full bg-muted">
+                        {slaSplit.total > 0 && (
+                          <>
+                            <div
+                              className="h-full bg-primary transition-all"
+                              style={{ width: `${(slaSplit.tempoAtivo / slaSplit.total) * 100}%` }}
+                            />
+                            <div
+                              className="h-full bg-status-atraso-cliente transition-all"
+                              style={{ width: `${(slaSplit.tempoParado / slaSplit.total) * 100}%` }}
+                            />
+                          </>
+                        )}
+                      </div>
+                      <p className="mt-1 text-[0.6rem] text-muted-foreground">
+                        Azul = ativo · Roxo = aguardando cliente (média por tarefa)
+                      </p>
+                    </div>
+                  </div>
+                )}
+                {!slaSplit.hasData && (
+                  <p className="mb-3 text-[0.7rem] text-muted-foreground italic">
+                    Histórico de pipeline ainda sendo coletado. Disponível após o próximo refresh de analytics.
+                  </p>
+                )}
                 {slaTrend.length > 0 ? (
                   <ResponsiveContainer width="100%" height={180}>
                     <LineChart data={slaTrend}>
