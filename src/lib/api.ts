@@ -8,43 +8,18 @@ async function taskrowFetch(path: string, options: { method?: string; body?: str
   const apiKey = useDashboardStore.getState().apiKey;
   const method = options.method || "GET";
 
-  if (import.meta.env.DEV) {
-    // In dev, use Vite proxy
-    const basePath = window.location.pathname.startsWith("/v2") ? "/v2" : "";
-
-    const url = new URL(`${window.location.origin}${basePath}/taskrow-api${path}`);
-    if (options.params) {
-      Object.entries(options.params).forEach(([k, v]) => {
-        if (v != null) url.searchParams.append(k, String(v));
-      });
-    }
-    return fetch(url.toString(), {
-      method,
-      headers: {
-        "__identifier": apiKey,
-        "Content-Type": "application/json",
-      },
-      body: options.body,
-    });
-  }
-
-  // In production, use Edge Function proxy
-  const projectId = import.meta.env.VITE_SUPABASE_URL?.replace('https://', '').replace('.supabase.co', '') || 'qfgzenoyfeijmzxrkqkx';
-  const edgeFunctionUrl = `https://${projectId}.supabase.co/functions/v1/taskrow-proxy`;
-
-  const url = new URL(edgeFunctionUrl);
+  const basePath = window.location.pathname.startsWith("/v2") ? "/v2" : "";
+  const url = new URL(`${window.location.origin}${basePath}/taskrow-api${path}`);
   if (options.params) {
     Object.entries(options.params).forEach(([k, v]) => {
       if (v != null) url.searchParams.append(k, String(v));
     });
   }
-
   return fetch(url.toString(), {
     method,
     headers: {
+      "__identifier": apiKey,
       "Content-Type": "application/json",
-      "x-taskrow-key": apiKey,
-      "x-taskrow-path": path,
     },
     body: options.body,
   });
