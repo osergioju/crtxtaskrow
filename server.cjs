@@ -12,7 +12,7 @@ const DIST_DIR = path.resolve(__dirname, "dist");
 const DATA_DIR = path.resolve(__dirname, "data");
 
 // ── Supabase config (pipeline history) ───────────────────────────────────────
-const SUPABASE_URL   = (process.env.VITE_SUPABASE_URL || "https://ysnbynpxjmumabgxuoau.supabase.co").replace(/\/$/, "");
+const SUPABASE_URL   = (process.env.VITE_SUPABASE_URL || "https://qfgzenoyfeijmzxrkqkx.supabase.co").replace(/\/$/, "");
 const SUPABASE_KEY   = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
 const SUPABASE_HOST  = SUPABASE_URL.replace("https://", "");
 

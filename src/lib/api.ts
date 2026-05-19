@@ -29,7 +29,7 @@ async function taskrowFetch(path: string, options: { method?: string; body?: str
   }
 
   // In production, use Edge Function proxy
-  const projectId = import.meta.env.VITE_SUPABASE_URL?.replace('https://', '').replace('.supabase.co', '') || 'ysnbynpxjmumabgxuoau';
+  const projectId = import.meta.env.VITE_SUPABASE_URL?.replace('https://', '').replace('.supabase.co', '') || 'qfgzenoyfeijmzxrkqkx';
   const edgeFunctionUrl = `https://${projectId}.supabase.co/functions/v1/taskrow-proxy`;
 
   const url = new URL(edgeFunctionUrl);
