@@ -1,1 +1,86 @@
-[]
+[
+  {
+    "clientId": "75611",
+    "clientName": "CRT",
+    "token": "ec9db238-6468-42b2-a012-dc201a03db3e",
+    "label": "Q2/2026",
+    "createdAt": "2026-04-10T15:07:01.746Z"
+  },
+  {
+    "clientId": "70751",
+    "clientName": "CBS",
+    "token": "35d8d2d1-9c87-4e39-806c-17038dbb36d4",
+    "label": "Q2/2026",
+    "createdAt": "2026-05-18T12:31:43.953Z"
+  },
+  {
+    "clientId": "70753",
+    "clientName": "Eletros",
+    "token": "f5893d46-87f9-4658-b70f-eb3490a1578b",
+    "label": "Q2/2026",
+    "createdAt": "2026-05-18T12:34:45.540Z"
+  },
+  {
+    "clientId": "70752",
+    "clientName": "Infraprev",
+    "token": "8f74820d-1c5b-42c9-b943-9dc4fa2fdbb9",
+    "label": "Q2/2026",
+    "createdAt": "2026-05-18T12:36:55.940Z"
+  },
+  {
+    "clientId": "70737",
+    "clientName": "Libertas",
+    "token": "ba8fa6cc-93af-4c13-8fc1-a2209aa9a449",
+    "label": "Q2/2026",
+    "createdAt": "2026-05-18T13:47:06.952Z"
+  },
+  {
+    "clientId": "75326",
+    "clientName": "Néos",
+    "token": "5fa12c71-3c93-4075-8dcf-2bf0a4ebbd6c",
+    "label": "Q2/2026",
+    "createdAt": "2026-05-18T13:48:34.494Z"
+  },
+  {
+    "clientId": "75263",
+    "clientName": "Fundaffemg",
+    "token": "7af3242a-011e-4e5b-8c4f-47f32c8feb62",
+    "label": "Q2/2026",
+    "createdAt": "2026-05-18T13:50:03.074Z"
+  },
+  {
+    "clientId": "75457",
+    "clientName": "CargillPrev",
+    "token": "1b3f3ee8-6ee8-4336-a5de-15b7e882f695",
+    "label": "Q2/2026",
+    "createdAt": "2026-05-18T20:12:33.558Z"
+  },
+  {
+    "clientId": "79891",
+    "clientName": "Previbayer",
+    "token": "9810e4fd-2de8-4e71-a508-3fb188795ad4",
+    "label": "Q2/2026",
+    "createdAt": "2026-05-18T20:18:46.030Z"
+  },
+  {
+    "clientId": "70754",
+    "clientName": "EnergisaPrev",
+    "token": "b1170cef-df14-4acc-a1db-9ed8ae38b3ab",
+    "label": "Q2/2026",
+    "createdAt": "2026-05-18T20:21:42.491Z"
+  },
+  {
+    "clientId": "79564",
+    "clientName": "Green Drain",
+    "token": "1357c7de-d93f-4df8-b885-7577ad6f4fd1",
+    "label": "Q2/2026",
+    "createdAt": "2026-05-18T20:47:49.191Z"
+  },
+  {
+    "clientId": "70756",
+    "clientName": "ELOS",
+    "token": "10bdb2cd-2104-4a66-be73-b2fa3459a59e",
+    "label": "Q2/2026",
+    "createdAt": "2026-05-19T17:45:15.961Z"
+  }
+]

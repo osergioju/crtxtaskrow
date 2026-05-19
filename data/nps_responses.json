@@ -1,1 +1,132 @@
-[]
+[
+  {
+    "id": "81151f15-8d6c-42ab-8d4b-e80f6cbcfc00",
+    "clientId": "75611",
+    "clientName": "CRT",
+    "token": "ec9db238-6468-42b2-a012-dc201a03db3e",
+    "cycleId": null,
+    "cycleLabel": null,
+    "answers": {
+      "q1": 8,
+      "q2": 7,
+      "q3": 10,
+      "q4": 10,
+      "q5": 10,
+      "q6": 7,
+      "q7": 10,
+      "q8": 10,
+      "q9": 10,
+      "q10": 8,
+      "comment": "A  CRT já entrega muito bem , peças lindas . São alguns ajustes que vão aprimorar o trabalho."
+    },
+    "createdAt": "2026-04-17T19:26:28.195Z"
+  },
+  {
+    "id": "d3b7aca2-ce48-41f8-9210-359a86fbdea8",
+    "clientId": "70751",
+    "clientName": "CBS",
+    "token": "35d8d2d1-9c87-4e39-806c-17038dbb36d4",
+    "cycleId": null,
+    "cycleLabel": null,
+    "answers": {
+      "q1": 10,
+      "q2": 10,
+      "q3": 9,
+      "q4": 10,
+      "q5": 10,
+      "q6": 9,
+      "q7": 10,
+      "q8": 9,
+      "q9": 10,
+      "q10": 10
+    },
+    "createdAt": "2026-05-18T13:19:34.505Z"
+  },
+  {
+    "id": "45f5429d-94fe-4af7-aac1-e10dc0ab069a",
+    "clientId": "75263",
+    "clientName": "Fundaffemg",
+    "token": "7af3242a-011e-4e5b-8c4f-47f32c8feb62",
+    "cycleId": null,
+    "cycleLabel": null,
+    "answers": {
+      "q1": 10,
+      "q2": 10,
+      "q3": 10,
+      "q4": 8,
+      "q5": 10,
+      "q6": 10,
+      "q7": 10,
+      "q8": 10,
+      "q9": 10,
+      "q10": 10
+    },
+    "createdAt": "2026-05-18T17:29:15.599Z"
+  },
+  {
+    "id": "f6238535-44b3-41ff-81e3-0495a33e1e28",
+    "clientId": "75326",
+    "clientName": "Néos",
+    "token": "5fa12c71-3c93-4075-8dcf-2bf0a4ebbd6c",
+    "cycleId": null,
+    "cycleLabel": null,
+    "answers": {
+      "q1": 10,
+      "q2": 10,
+      "q3": 10,
+      "q4": 10,
+      "q5": 10,
+      "q6": 10,
+      "q7": 10,
+      "q8": 10,
+      "q9": 10,
+      "q10": 10,
+      "comment": "Gostaríamos de parabenizar toda a equipe da CRT pelo excelente atendimento, pela agilidade nas demandas e pela forma proativa como sempre apresentam soluções. É muito bom contar com uma equipe comprometida e atenciosa."
+    },
+    "createdAt": "2026-05-18T20:36:01.321Z"
+  },
+  {
+    "id": "fe664814-0e4f-4b30-bd55-bfde9252061a",
+    "clientId": "70754",
+    "clientName": "EnergisaPrev",
+    "token": "b1170cef-df14-4acc-a1db-9ed8ae38b3ab",
+    "cycleId": null,
+    "cycleLabel": null,
+    "answers": {
+      "q1": 10,
+      "q2": 10,
+      "q3": 9,
+      "q4": 9,
+      "q5": 9,
+      "q6": 8,
+      "q7": 8,
+      "q8": 10,
+      "q9": 9,
+      "q10": 10,
+      "comment": "O único ponto de atenção é com relação a detalhes, validação de material antes de sair para o cliente. Vcs precisam criar o processo de checagem...tem que ter nem que seja um estagiário que vai garantir que tudo que deveria ser executado, inclusive escrito foi de fato entregue. Pq existem erros bobos. Para clientes exigentes isso é a morte. E prazo é prazo, se ver que não vai dar repactua antes."
+    },
+    "createdAt": "2026-05-18T20:41:00.225Z"
+  },
+  {
+    "id": "9775ced6-021d-40c7-8118-5e070694cdc6",
+    "clientId": "79891",
+    "clientName": "Previbayer",
+    "token": "9810e4fd-2de8-4e71-a508-3fb188795ad4",
+    "cycleId": null,
+    "cycleLabel": null,
+    "answers": {
+      "q1": 8,
+      "q2": 8,
+      "q3": 7,
+      "q4": 8,
+      "q5": 5,
+      "q6": 5,
+      "q7": 5,
+      "q8": 7,
+      "q9": 8,
+      "q10": 8,
+      "comment": "A parceria tem sido positiva e a equipe é disponível no dia a dia. Ainda assim, sentimos falta de maior proatividade na comunicação de status das demandas, o que gera necessidade de acompanhamento constante da nossa parte. Vemos oportunidade de melhoria na organização das demandas e na revisão interna dos materiais antes do envio para aprovação.Além de maior alinhamento ao nosso tom de voz, com foco em simplificação,linguagem próxima  e clareza das informações em nossos comunicados."
+    },
+    "createdAt": "2026-05-18T20:49:04.027Z"
+  }
+]
