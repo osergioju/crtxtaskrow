@@ -386,7 +386,7 @@ function runAnalyticsPipeline() {
 
     const stdoutChunks = [];
     const stderrChunks = [];
-    const proc = spawn("python3", args, { cwd: __dirname });
+    const proc = spawn(path.join(__dirname, "venv/bin/python"), args, { cwd: __dirname });
     proc.stdout.on("data", (d) => stdoutChunks.push(d));
     proc.stderr.on("data", (d) => stderrChunks.push(d));
     proc.on("close", (code) => {
