@@ -27,18 +27,19 @@ function buildUserMetrics(users: TaskrowUser[], tasks: TaskrowTask[]): UserMetri
 
   return users.filter(u => !u.Inactive && byUser.has(u.UserID)).map(user => {
     const ut = byUser.get(user.UserID) || [];
-    let andamento = 0, atrasadas = 0, emDia = 0, backlog = 0, urgente = 0, retrabalho = 0, concluidas = 0;
+    let andamento = 0, atrasadas = 0, atrasadasCliente = 0, emDia = 0, backlog = 0, urgente = 0, retrabalho = 0, concluidas = 0;
     ut.forEach(t => {
       const s = classifyTask(t);
       if (s === "concluida") concluidas++;
       else if (s === "atraso") atrasadas++;
+      else if (s === "atraso_cliente") atrasadasCliente++;
       else if (s === "em_dia") emDia++;
       else if (s === "backlog") backlog++;
       else if (s === "retrabalho") retrabalho++;
       else if (s === "urgente") urgente++;
       else andamento++;
     });
-    return { user, tasks: ut, andamento, atrasadas, emDia, backlog, urgente, retrabalho, concluidas, slaMedia: calcSLA(ut) };
+    return { user, tasks: ut, andamento, atrasadas, atrasadasCliente, emDia, backlog, urgente, retrabalho, concluidas, slaMedia: calcSLA(ut) };
   });
 }
 
@@ -145,9 +146,9 @@ export default function CollaboratorView() {
 
                     <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
                       <div><span className="text-primary font-bold">{open}</span> <span className="text-muted-foreground">ABERTAS</span></div>
-                      <div><span className="text-destructive font-bold">{m.atrasadas}</span> <span className="text-muted-foreground">ATRASADAS</span></div>
+                      <div><span className="text-destructive font-bold">{m.atrasadas}</span> <span className="text-muted-foreground">ATRASO CRT</span></div>
+                      <div><span className="text-status-atraso-cliente font-bold">{m.atrasadasCliente}</span> <span className="text-muted-foreground">AG. CLIENTE</span></div>
                       <div><span className="text-status-em-dia font-bold">{m.concluidas}</span> <span className="text-muted-foreground">CONCLUÍDAS</span></div>
-                      <div><span className="text-foreground font-bold">{m.urgente}</span> <span className="text-muted-foreground">URGENTES</span></div>
                     </div>
 
                     <div className="mt-3 flex items-center gap-2">

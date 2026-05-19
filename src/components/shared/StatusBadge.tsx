@@ -7,6 +7,7 @@ const statusStyles: Record<TaskStatus, string> = {
   andamento: "bg-primary/10 text-primary border-primary/20",
   backlog: "bg-status-backlog/10 text-status-backlog border-status-backlog/20",
   atraso: "bg-destructive/10 text-destructive border-destructive/20",
+  atraso_cliente: "bg-status-atraso-cliente/10 text-status-atraso-cliente border-status-atraso-cliente/20",
   em_dia: "bg-status-em-dia/10 text-status-em-dia border-status-em-dia/20",
   retrabalho: "bg-status-retrabalho/10 text-status-retrabalho border-status-retrabalho/20",
   urgente: "bg-foreground text-background border-foreground",

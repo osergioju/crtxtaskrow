@@ -39,7 +39,7 @@ export default function ClientDetail() {
   const clientName = tasks[0]?.clientDisplayName || nick || "";
 
   const counts = useMemo(() => {
-    const c: Record<TaskStatus, number> = { andamento: 0, backlog: 0, atraso: 0, em_dia: 0, retrabalho: 0, urgente: 0, concluida: 0 };
+    const c: Record<TaskStatus, number> = { andamento: 0, backlog: 0, atraso: 0, atraso_cliente: 0, em_dia: 0, retrabalho: 0, urgente: 0, concluida: 0 };
     tasks.forEach(t => { c[classifyTask(t)]++; });
     return c;
   }, [tasks]);
@@ -80,7 +80,7 @@ export default function ClientDetail() {
   const filteredTasks = useMemo(() => {
     let list = tasks;
     if (tab === "abertas") list = list.filter(t => !t.closed);
-    else if (tab === "atrasadas") list = list.filter(t => classifyTask(t) === "atraso");
+    else if (tab === "atrasadas") list = list.filter(t => classifyTask(t) === "atraso" || classifyTask(t) === "atraso_cliente");
     else if (tab === "concluidas") list = list.filter(t => t.closed);
     if (taskSearch) {
       const q = taskSearch.toLowerCase();
@@ -116,7 +116,8 @@ export default function ClientDetail() {
           { label: "TOTAL", value: total, cls: "text-foreground" },
           { label: "EM ANDAMENTO", value: counts.andamento + counts.em_dia, cls: "text-primary" },
           { label: "CONCLUÍDAS", value: counts.concluida, cls: "text-status-em-dia" },
-          { label: "ATRASADAS", value: counts.atraso, cls: "text-destructive" },
+          { label: "ATRASO CRT", value: counts.atraso, cls: "text-destructive" },
+          { label: "AG. CLIENTE", value: counts.atraso_cliente, cls: "text-status-atraso-cliente" },
           { label: "EM DIA", value: counts.em_dia, cls: "text-status-em-dia" },
           { label: "BACKLOG", value: counts.backlog, cls: "text-status-backlog" },
           { label: "RETRABALHO", value: counts.retrabalho, cls: "text-status-retrabalho" },

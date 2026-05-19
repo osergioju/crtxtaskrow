@@ -65,6 +65,7 @@ export default {
           andamento: "hsl(var(--status-andamento))",
           backlog: "hsl(var(--status-backlog))",
           atraso: "hsl(var(--status-atraso))",
+          "atraso-cliente": "hsl(var(--status-atraso-cliente))",
           "em-dia": "hsl(var(--status-em-dia))",
           retrabalho: "hsl(var(--status-retrabalho))",
           urgente: "hsl(var(--status-urgente))",

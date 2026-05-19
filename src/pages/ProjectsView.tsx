@@ -24,6 +24,7 @@ interface ProjectMetrics {
   abertas: number;
   concluidas: number;
   atrasadas: number;
+  atrasadasCliente: number;
   emDia: number;
   backlog: number;
   retrabalho: number;
@@ -42,11 +43,12 @@ function buildProjectMetrics(tasks: TaskrowTask[]): ProjectMetrics[] {
   });
 
   return Array.from(byJob.entries()).map(([jobID, jt]) => {
-    let concluidas = 0, atrasadas = 0, emDia = 0, backlog = 0, retrabalho = 0, urgente = 0, andamento = 0;
+    let concluidas = 0, atrasadas = 0, atrasadasCliente = 0, emDia = 0, backlog = 0, retrabalho = 0, urgente = 0, andamento = 0;
     jt.forEach(t => {
       const s = classifyTask(t);
       if (s === "concluida") concluidas++;
       else if (s === "atraso") atrasadas++;
+      else if (s === "atraso_cliente") atrasadasCliente++;
       else if (s === "em_dia") emDia++;
       else if (s === "backlog") backlog++;
       else if (s === "retrabalho") retrabalho++;
@@ -63,6 +65,7 @@ function buildProjectMetrics(tasks: TaskrowTask[]): ProjectMetrics[] {
       abertas,
       concluidas,
       atrasadas,
+      atrasadasCliente,
       emDia,
       backlog,
       retrabalho,
@@ -105,6 +108,7 @@ export default function ProjectsView() {
     tasks: metrics.reduce((s, m) => s + m.total, 0),
     abertas: metrics.reduce((s, m) => s + m.abertas, 0),
     atrasadas: metrics.reduce((s, m) => s + m.atrasadas, 0),
+    atrasadasCliente: metrics.reduce((s, m) => s + m.atrasadasCliente, 0),
   }), [metrics]);
 
   const handleSort = (key: SortKey) => {
@@ -126,11 +130,12 @@ export default function ProjectsView() {
           {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-24 rounded-xl" />)}
         </div>
       ) : (
-        <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
           <KPICard label="PROJETOS" value={totals.projects} color="indigo" size="sm" />
           <KPICard label="TOTAL TASKS" value={totals.tasks} color="indigo" size="sm" bgColored={false} />
           <KPICard label="ABERTAS" value={totals.abertas} color="amber" size="sm" bgColored />
-          <KPICard label="ATRASADAS" value={totals.atrasadas} color="red" size="sm" bgColored />
+          <KPICard label="ATRASO CRT" value={totals.atrasadas} color="red" size="sm" bgColored />
+          <KPICard label="AG. CLIENTE" value={totals.atrasadasCliente} color="purple" size="sm" bgColored />
         </div>
       )}
 
@@ -152,7 +157,8 @@ export default function ProjectsView() {
               <TableHead className="cursor-pointer text-right" onClick={() => handleSort("total")}>TOTAL <SortIcon col="total" /></TableHead>
               <TableHead className="cursor-pointer text-right" onClick={() => handleSort("abertas")}>ABERTAS <SortIcon col="abertas" /></TableHead>
               <TableHead className="cursor-pointer text-right" onClick={() => handleSort("concluidas")}>CONCLUÍDAS <SortIcon col="concluidas" /></TableHead>
-              <TableHead className="cursor-pointer text-right" onClick={() => handleSort("atrasadas")}>ATRASADAS <SortIcon col="atrasadas" /></TableHead>
+              <TableHead className="cursor-pointer text-right" onClick={() => handleSort("atrasadas")}>ATRASO CRT <SortIcon col="atrasadas" /></TableHead>
+              <TableHead className="text-right">AG. CLIENTE</TableHead>
               <TableHead className="text-right">BACKLOG</TableHead>
               <TableHead className="text-right">URGENTE</TableHead>
               <TableHead className="cursor-pointer text-right" onClick={() => handleSort("sla")}>SLA <SortIcon col="sla" /></TableHead>
@@ -163,7 +169,7 @@ export default function ProjectsView() {
             {isLoading
               ? Array.from({ length: 8 }).map((_, i) => (
                   <TableRow key={i}>
-                    {Array.from({ length: 11 }).map((_, j) => <TableCell key={j}><Skeleton className="h-4 w-full" /></TableCell>)}
+                    {Array.from({ length: 12 }).map((_, j) => <TableCell key={j}><Skeleton className="h-4 w-full" /></TableCell>)}
                   </TableRow>
                 ))
               : pagedItems.map(m => {
@@ -179,6 +185,11 @@ export default function ProjectsView() {
                       <TableCell className="text-right">
                         {m.atrasadas > 0 ? (
                           <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-destructive/10 text-xs font-bold text-destructive">{m.atrasadas}</span>
+                        ) : <span className="text-muted-foreground">0</span>}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        {m.atrasadasCliente > 0 ? (
+                          <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-status-atraso-cliente/10 text-xs font-bold text-status-atraso-cliente">{m.atrasadasCliente}</span>
                         ) : <span className="text-muted-foreground">0</span>}
                       </TableCell>
                       <TableCell className="text-right text-status-backlog">{m.backlog}</TableCell>

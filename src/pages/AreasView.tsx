@@ -30,6 +30,7 @@ interface AreaMetrics {
   andamento: number;
   concluidas: number;
   atrasadas: number;
+  atrasadasCliente: number;
   emDia: number;
   backlog: number;
   retrabalho: number;
@@ -52,11 +53,12 @@ function buildAreaMetrics(tasks: TaskrowTask[], users: TaskrowUser[]): AreaMetri
   });
 
   return Array.from(byArea.entries()).map(([area, { tasks: at, userIds }]) => {
-    let andamento = 0, concluidas = 0, atrasadas = 0, emDia = 0, backlog = 0, retrabalho = 0, urgente = 0;
+    let andamento = 0, concluidas = 0, atrasadas = 0, atrasadasCliente = 0, emDia = 0, backlog = 0, retrabalho = 0, urgente = 0;
     at.forEach(t => {
       const s = classifyTask(t);
       if (s === "concluida") concluidas++;
       else if (s === "atraso") atrasadas++;
+      else if (s === "atraso_cliente") atrasadasCliente++;
       else if (s === "em_dia") emDia++;
       else if (s === "backlog") backlog++;
       else if (s === "retrabalho") retrabalho++;
@@ -65,7 +67,7 @@ function buildAreaMetrics(tasks: TaskrowTask[], users: TaskrowUser[]): AreaMetri
     });
     return {
       area, users: userIds.size, total: at.length,
-      andamento, concluidas, atrasadas, emDia, backlog, retrabalho, urgente,
+      andamento, concluidas, atrasadas, atrasadasCliente, emDia, backlog, retrabalho, urgente,
       sla: calcSLA(at),
     };
   }).sort((a, b) => b.total - a.total);
@@ -122,13 +124,14 @@ export default function AreasView() {
   const totalAreas = metrics.length;
   const totalTasks = metrics.reduce((s, m) => s + m.total, 0);
   const totalOverdue = metrics.reduce((s, m) => s + m.atrasadas, 0);
+  const totalOverdueCliente = metrics.reduce((s, m) => s + m.atrasadasCliente, 0);
   const maxArea = metrics.length > 0 ? metrics[0] : null;
 
   const chartData = useMemo(() => metrics.slice(0, 10).map(m => ({ name: m.area, value: m.total })), [metrics]);
 
   const statusDistribution = useMemo(() => {
     if (!tasks) return [];
-    const counts: Record<TaskStatus, number> = { andamento: 0, backlog: 0, atraso: 0, em_dia: 0, retrabalho: 0, urgente: 0, concluida: 0 };
+    const counts: Record<TaskStatus, number> = { andamento: 0, backlog: 0, atraso: 0, atraso_cliente: 0, em_dia: 0, retrabalho: 0, urgente: 0, concluida: 0 };
     tasks.forEach(t => { counts[classifyTask(t)]++; });
     return (Object.entries(counts) as [TaskStatus, number][])
       .filter(([, v]) => v > 0)
@@ -153,10 +156,11 @@ export default function AreasView() {
           {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-24 rounded-xl" />)}
         </div>
       ) : (
-        <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
           <KPICard label="ÁREAS ATIVAS" value={totalAreas} color="indigo" size="sm" />
           <KPICard label="TASKS NO PERÍODO" value={totalTasks} color="indigo" size="sm" bgColored={false} />
-          <KPICard label="EM ATRASO" value={totalOverdue} color="red" size="sm" bgColored />
+          <KPICard label="ATRASO CRT" value={totalOverdue} color="red" size="sm" bgColored />
+          <KPICard label="AG. CLIENTE" value={totalOverdueCliente} color="purple" size="sm" bgColored />
           <KPICard label="ÁREA COM MAIS CARGA" value={maxArea?.area || "—"} color="amber" size="sm" bgColored={false} />
         </div>
       )}
@@ -231,7 +235,8 @@ export default function AreasView() {
                   <TableHead className="text-right">TOTAL</TableHead>
                   <TableHead className="text-right">ANDAMENTO</TableHead>
                   <TableHead className="text-right">CONCLUÍDAS</TableHead>
-                  <TableHead className="text-right">ATRASADAS</TableHead>
+                  <TableHead className="text-right">ATRASO CRT</TableHead>
+                  <TableHead className="text-right">AG. CLIENTE</TableHead>
                   <TableHead className="text-right">EM DIA</TableHead>
                   <TableHead className="text-right">BACKLOG</TableHead>
                   <TableHead className="text-right">URGENTE</TableHead>
@@ -243,7 +248,7 @@ export default function AreasView() {
                 {loading
                   ? Array.from({ length: 5 }).map((_, i) => (
                       <TableRow key={i}>
-                        {Array.from({ length: 11 }).map((_, j) => (
+                        {Array.from({ length: 12 }).map((_, j) => (
                           <TableCell key={j}><Skeleton className="h-4 w-full" /></TableCell>
                         ))}
                       </TableRow>
@@ -261,6 +266,11 @@ export default function AreasView() {
                           <TableCell className="text-right">
                             {m.atrasadas > 0 ? (
                               <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-destructive/10 text-xs font-bold text-destructive">{m.atrasadas}</span>
+                            ) : <span className="text-muted-foreground">0</span>}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            {m.atrasadasCliente > 0 ? (
+                              <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-status-atraso-cliente/10 text-xs font-bold text-status-atraso-cliente">{m.atrasadasCliente}</span>
                             ) : <span className="text-muted-foreground">0</span>}
                           </TableCell>
                           <TableCell className="text-right text-emerald-600">{m.emDia}</TableCell>

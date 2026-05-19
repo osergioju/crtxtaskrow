@@ -25,7 +25,7 @@ const GESTAO_NAMES = ["giu", "sérgio junior", "isabel aquino", "bruno", "michel
 
 function countByStatus(tasks: TaskrowTask[]) {
   const counts: Record<TaskStatus, number> = {
-    andamento: 0, backlog: 0, atraso: 0, em_dia: 0, retrabalho: 0, urgente: 0, concluida: 0,
+    andamento: 0, backlog: 0, atraso: 0, atraso_cliente: 0, em_dia: 0, retrabalho: 0, urgente: 0, concluida: 0,
   };
   tasks.forEach(t => { counts[classifyTask(t)]++; });
   return counts;
@@ -51,10 +51,11 @@ function getUserMetrics(tasks: TaskrowTask[], users: TaskrowUser[]) {
 function healthScore(c: ReturnType<typeof countByStatus>, total: number) {
   if (total === 0) return 100;
   const pctAtraso = (c.atraso / total) * 100;
+  const pctAtrasoCliente = (c.atraso_cliente / total) * 100;
   const pctRetrabalho = (c.retrabalho / total) * 100;
   const pctUrgente = (c.urgente / total) * 100;
-  const penalty = pctAtraso * 0.45 + pctRetrabalho * 0.30 + pctUrgente * 0.25;
-  return { score: Math.max(0, Math.round(100 - penalty)), pctAtraso, pctRetrabalho, pctUrgente };
+  const penalty = pctAtraso * 0.45 + pctAtrasoCliente * 0.10 + pctRetrabalho * 0.30 + pctUrgente * 0.25;
+  return { score: Math.max(0, Math.round(100 - penalty)), pctAtraso, pctAtrasoCliente, pctRetrabalho, pctUrgente };
 }
 
 // ─── Team Health Card ──────────────────────────────────────────────────────────
@@ -75,8 +76,8 @@ function TeamHealthCard({ tasks, users }: { tasks: TaskrowTask[]; users: Taskrow
     return Array.from(areaMap.entries())
       .map(([area, areaTasks]) => {
         const c = countByStatus(areaTasks);
-        const { score, pctAtraso, pctRetrabalho, pctUrgente } = healthScore(c, areaTasks.length);
-        return { area, score, pctAtraso, pctRetrabalho, pctUrgente, total: areaTasks.length };
+        const { score, pctAtraso, pctAtrasoCliente, pctRetrabalho, pctUrgente } = healthScore(c, areaTasks.length);
+        return { area, score, pctAtraso, pctAtrasoCliente, pctRetrabalho, pctUrgente, total: areaTasks.length };
       })
       .sort((a, b) => a.score - b.score);
   }, [open, users]);
@@ -93,7 +94,7 @@ function TeamHealthCard({ tasks, users }: { tasks: TaskrowTask[]; users: Taskrow
       </CardHeader>
       <CardContent>
         <div className="max-h-[340px] overflow-y-auto space-y-4 pr-1">
-          {areaData.map(({ area, score, pctAtraso, pctRetrabalho, pctUrgente, total }) => {
+          {areaData.map(({ area, score, pctAtraso, pctAtrasoCliente, pctRetrabalho, pctUrgente, total }) => {
             const { statusLabel, textColor, barColor, badgeClass } = score >= 70
               ? { statusLabel: "Saudável", textColor: "text-emerald-600", barColor: "bg-emerald-500", badgeClass: "bg-emerald-50 text-emerald-700 border-emerald-200" }
               : score >= 40
@@ -116,10 +117,14 @@ function TeamHealthCard({ tasks, users }: { tasks: TaskrowTask[]; users: Taskrow
                   </div>
                 </div>
 
-                <div className="grid grid-cols-3 gap-1 text-center">
+                <div className="grid grid-cols-4 gap-1 text-center">
                   <div>
                     <p className="text-xs font-bold text-destructive">{pctAtraso.toFixed(0)}%</p>
-                    <p className="text-[0.6rem] uppercase tracking-wide text-muted-foreground">Atraso</p>
+                    <p className="text-[0.6rem] uppercase tracking-wide text-muted-foreground">Atraso CRT</p>
+                  </div>
+                  <div>
+                    <p className="text-xs font-bold text-status-atraso-cliente">{pctAtrasoCliente.toFixed(0)}%</p>
+                    <p className="text-[0.6rem] uppercase tracking-wide text-muted-foreground">Ag. Cliente</p>
                   </div>
                   <div>
                     <p className="text-xs font-bold text-orange-500">{pctRetrabalho.toFixed(0)}%</p>
@@ -291,7 +296,7 @@ export default function Overview() {
 
   const maxTasks = Math.max(...[...gestao, ...operacao].map(u => u.total), 1);
   const totalActive = counts
-    ? counts.andamento + counts.em_dia + counts.atraso + counts.backlog + counts.retrabalho + counts.urgente
+    ? counts.andamento + counts.em_dia + counts.atraso + counts.atraso_cliente + counts.backlog + counts.retrabalho + counts.urgente
     : 0;
 
   return (
@@ -305,7 +310,7 @@ export default function Overview() {
           ))}
         </div>
       ) : (
-        <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-5">
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6">
           <KPICard
             label="EM ANDAMENTO"
             value={totalActive}
@@ -314,11 +319,18 @@ export default function Overview() {
             onClick={() => navigate("/tarefas?status=abertas")}
           />
           <KPICard
-            label="EM ATRASO"
+            label="ATRASO CRT"
             value={counts.atraso}
             color="red"
             bgColored
             onClick={() => navigate("/tarefas?status=atraso")}
+          />
+          <KPICard
+            label="AG. CLIENTE"
+            value={counts.atraso_cliente}
+            color="purple"
+            bgColored
+            onClick={() => navigate("/tarefas?status=atraso_cliente")}
           />
           <KPICard
             label="EM DIA"
@@ -385,7 +397,24 @@ export default function Overview() {
                     <div>
                       <p className="text-sm font-bold text-destructive">Atenção Crítica</p>
                       <p className="text-3xl font-bold text-destructive">{counts.atraso}</p>
-                      <p className="text-xs text-muted-foreground">em atraso — Clique para ver detalhes.</p>
+                      <p className="text-xs text-muted-foreground">atraso CRT — Clique para ver detalhes.</p>
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+              {counts && counts.atraso_cliente > 0 && (
+                <Card
+                  className="cursor-pointer border-status-atraso-cliente/20 bg-status-atraso-cliente/5 transition-all hover:shadow-md active:scale-[0.99]"
+                  onClick={() => navigate("/tarefas?status=atraso_cliente")}
+                >
+                  <CardContent className="flex items-start gap-3 p-4">
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-status-atraso-cliente">
+                      <Bell className="h-5 w-5 text-white" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-bold text-status-atraso-cliente">Aguardando Cliente</p>
+                      <p className="text-3xl font-bold text-status-atraso-cliente">{counts.atraso_cliente}</p>
+                      <p className="text-xs text-muted-foreground">aprovação pendente — Clique para ver detalhes.</p>
                     </div>
                   </CardContent>
                 </Card>
@@ -473,6 +502,9 @@ function RankingCard({
                     <div className="flex items-center gap-1.5 text-xs">
                       <span className="font-semibold text-primary">{u.counts.andamento + u.counts.em_dia}</span>
                       <span className="font-semibold text-destructive">{u.counts.atraso}</span>
+                      {u.counts.atraso_cliente > 0 && (
+                        <span className="font-semibold text-status-atraso-cliente">{u.counts.atraso_cliente}</span>
+                      )}
                       <span className="font-semibold text-emerald-600">{u.counts.concluida}</span>
                       <span className="font-semibold text-amber-500">{u.counts.backlog}</span>
                       {u.counts.urgente > 0 && (

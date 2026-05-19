@@ -134,12 +134,13 @@ export default function TasksView() {
   }, [tasks]);
 
   const counts = useMemo(() => {
-    const c: Record<string, number> = { total: 0, abertas: 0, concluidas: 0, atrasadas: 0, urgentes: 0 };
+    const c: Record<string, number> = { total: 0, abertas: 0, concluidas: 0, atrasadas: 0, atrasadasCliente: 0, urgentes: 0 };
     classified.forEach(t => {
       c.total++;
       if (t.closed) c.concluidas++;
       else c.abertas++;
       if (t._status === "atraso") c.atrasadas++;
+      if (t._status === "atraso_cliente") c.atrasadasCliente++;
       if (t._status === "urgente") c.urgentes++;
     });
     return c;
@@ -186,7 +187,7 @@ export default function TasksView() {
     return sortAsc ? <ChevronUp className="inline h-3 w-3" /> : <ChevronDown className="inline h-3 w-3" />;
   };
 
-  const activeStatusKey = ["atraso", "em_dia", "backlog", "retrabalho", "urgente", "concluida"].includes(statusFilter)
+  const activeStatusKey = ["atraso", "atraso_cliente", "em_dia", "backlog", "retrabalho", "urgente", "concluida"].includes(statusFilter)
     ? (statusFilter as TaskStatus)
     : null;
 
@@ -199,11 +200,12 @@ export default function TasksView() {
           {Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-24 rounded-xl" />)}
         </div>
       ) : (
-        <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-6">
           <KPICard label="TOTAL" value={counts.total} color="indigo" size="sm" />
           <KPICard label="ABERTAS" value={counts.abertas} color="indigo" size="sm" bgColored onClick={() => { setStatusFilter("abertas"); setPage(0); }} />
           <KPICard label="CONCLUÍDAS" value={counts.concluidas} color="green" size="sm" bgColored={false} onClick={() => { setStatusFilter("fechadas"); setPage(0); }} />
-          <KPICard label="EM ATRASO" value={counts.atrasadas} color="red" size="sm" bgColored onClick={() => { setStatusFilter("atraso"); setPage(0); }} />
+          <KPICard label="ATRASO CRT" value={counts.atrasadas} color="red" size="sm" bgColored onClick={() => { setStatusFilter("atraso"); setPage(0); }} />
+          <KPICard label="AG. CLIENTE" value={counts.atrasadasCliente} color="purple" size="sm" bgColored onClick={() => { setStatusFilter("atraso_cliente"); setPage(0); }} />
           <KPICard label="URGENTES" value={counts.urgentes} color="dark" size="sm" bgColored={counts.urgentes > 0} onClick={() => { setStatusFilter("urgente"); setPage(0); }} />
         </div>
       )}
@@ -219,7 +221,8 @@ export default function TasksView() {
             <SelectItem value="all">Todos</SelectItem>
             <SelectItem value="abertas">Abertas</SelectItem>
             <SelectItem value="fechadas">Fechadas</SelectItem>
-            <SelectItem value="atraso">Em Atraso</SelectItem>
+            <SelectItem value="atraso">Atraso CRT</SelectItem>
+            <SelectItem value="atraso_cliente">Ag. Aprovação Cliente</SelectItem>
             <SelectItem value="em_dia">Em Dia</SelectItem>
             <SelectItem value="backlog">Backlog</SelectItem>
             <SelectItem value="retrabalho">Retrabalho</SelectItem>

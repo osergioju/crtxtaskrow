@@ -1,5 +1,7 @@
 import type { TaskrowTask, TaskStatus } from "@/types/taskrow";
 
+const CLIENT_APPROVAL_STEPS = ["aprovação do cliente", "aprovação externa"];
+
 export function classifyTask(task: TaskrowTask): TaskStatus {
   if (task.closed) return "concluida";
 
@@ -14,10 +16,12 @@ export function classifyTask(task: TaskrowTask): TaskStatus {
   const isRework = tags.includes("retrabalho") || pipeline.includes("retrabalho");
   const isBacklog = !due || pipeline.includes("backlog") || pipeline.includes("aguardando") || pipeline === "";
   const isOverdue = due && due < today;
+  const isClientApproval = CLIENT_APPROVAL_STEPS.some(s => pipeline.includes(s));
 
   if (isUrgent) return "urgente";
   if (isRework) return "retrabalho";
   if (isBacklog) return "backlog";
+  if (isOverdue && isClientApproval) return "atraso_cliente";
   if (isOverdue) return "atraso";
   return "em_dia";
 }
@@ -26,7 +30,8 @@ export function getStatusLabel(s: TaskStatus): string {
   const labels: Record<TaskStatus, string> = {
     andamento: "Em Andamento",
     backlog: "Backlog",
-    atraso: "Em Atraso",
+    atraso: "Atraso CRT",
+    atraso_cliente: "Atraso - Cliente",
     em_dia: "Em Dia",
     retrabalho: "Retrabalho",
     urgente: "Urgente",
@@ -40,6 +45,7 @@ export function getStatusColor(s: TaskStatus): string {
     andamento: "#6366F1",
     backlog: "#F59E0B",
     atraso: "#EF4444",
+    atraso_cliente: "#9333EA",
     em_dia: "#10B981",
     retrabalho: "#F97316",
     urgente: "#111827",

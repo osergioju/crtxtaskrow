@@ -40,7 +40,7 @@ export default function CollaboratorDetail() {
   const tasks = useMemo(() => allTasks?.filter(t => t.ownerUserID === userID) || [], [allTasks, userID]);
 
   const counts = useMemo(() => {
-    const c: Record<TaskStatus, number> = { andamento: 0, backlog: 0, atraso: 0, em_dia: 0, retrabalho: 0, urgente: 0, concluida: 0 };
+    const c: Record<TaskStatus, number> = { andamento: 0, backlog: 0, atraso: 0, atraso_cliente: 0, em_dia: 0, retrabalho: 0, urgente: 0, concluida: 0 };
     tasks.forEach(t => { c[classifyTask(t)]++; });
     return c;
   }, [tasks]);
@@ -126,7 +126,8 @@ export default function CollaboratorDetail() {
           ["TOTAL", tasks.length, "text-foreground"],
           ["EM ANDAMENTO", counts.andamento + counts.em_dia, "text-primary"],
           ["CONCLUÍDAS", counts.concluida, "text-status-em-dia"],
-          ["ATRASADAS", counts.atraso, "text-destructive"],
+          ["ATRASO CRT", counts.atraso, "text-destructive"],
+          ["AG. CLIENTE", counts.atraso_cliente, "text-status-atraso-cliente"],
           ["EM DIA", counts.em_dia, "text-status-em-dia"],
           ["BACKLOG", counts.backlog, "text-status-backlog"],
           ["RETRABALHO", counts.retrabalho, "text-status-retrabalho"],
@@ -317,7 +318,8 @@ export default function CollaboratorDetail() {
                 <SelectItem value="all">Todas</SelectItem>
                 <SelectItem value="abertas">Abertas</SelectItem>
                 <SelectItem value="fechadas">Fechadas</SelectItem>
-                <SelectItem value="atraso">Em Atraso</SelectItem>
+                <SelectItem value="atraso">Atraso CRT</SelectItem>
+                <SelectItem value="atraso_cliente">Ag. Aprovação Cliente</SelectItem>
                 <SelectItem value="urgente">Urgente</SelectItem>
               </SelectContent>
             </Select>

@@ -4,7 +4,7 @@ import { cn } from "@/lib/utils";
 interface KPICardProps {
   label: string;
   value: string | number;
-  color?: "indigo" | "red" | "green" | "amber" | "orange" | "dark";
+  color?: "indigo" | "red" | "green" | "amber" | "orange" | "dark" | "purple";
   size?: "lg" | "sm";
   bgColored?: boolean;
   onClick?: () => void;
@@ -17,6 +17,7 @@ const colorMap: Record<string, { text: string; bg: string }> = {
   amber: { text: "text-status-backlog", bg: "bg-status-backlog/5" },
   orange: { text: "text-status-retrabalho", bg: "bg-status-retrabalho/5" },
   dark: { text: "text-foreground", bg: "bg-card" },
+  purple: { text: "text-status-atraso-cliente", bg: "bg-status-atraso-cliente/5" },
 };
 
 export function KPICard({ label, value, color = "indigo", size = "lg", bgColored = true, onClick }: KPICardProps) {

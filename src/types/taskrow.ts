@@ -73,7 +73,7 @@ export interface AdvancedSearchPayload {
 }
 
 export type TaskStatus =
-  | "andamento" | "backlog" | "atraso"
+  | "andamento" | "backlog" | "atraso" | "atraso_cliente"
   | "em_dia" | "retrabalho" | "urgente" | "concluida";
 
 export interface ClientMetrics {
@@ -83,6 +83,7 @@ export interface ClientMetrics {
   andamento: number;
   concluidas: number;
   atrasadas: number;
+  atrasadasCliente: number;
   emDia: number;
   backlog: number;
   retrabalho: number;
@@ -97,6 +98,7 @@ export interface UserMetrics {
   tasks: TaskrowTask[];
   andamento: number;
   atrasadas: number;
+  atrasadasCliente: number;
   emDia: number;
   backlog: number;
   urgente: number;

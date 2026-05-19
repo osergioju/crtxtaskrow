@@ -17,7 +17,7 @@ import { calcSLA } from "@/lib/sla";
 import { cn } from "@/lib/utils";
 import type { TaskrowTask, ClientMetrics, TaskrowClient } from "@/types/taskrow";
 
-type SortKey = "name" | "total" | "andamento" | "concluidas" | "atrasadas" | "emDia" | "backlog" | "retrabalho" | "pctRetrabalho" | "urgente" | "slaMedia";
+type SortKey = "name" | "total" | "andamento" | "concluidas" | "atrasadas" | "atrasadasCliente" | "emDia" | "backlog" | "retrabalho" | "pctRetrabalho" | "urgente" | "slaMedia";
 
 interface ClientInfo {
   id: number;
@@ -45,11 +45,12 @@ function buildClientMetricsFromTasks(tasks: TaskrowTask[], clients?: TaskrowClie
       Inactive: false,
     };
 
-    let andamento = 0, concluidas = 0, atrasadas = 0, emDia = 0, backlog = 0, retrabalho = 0, urgente = 0;
+    let andamento = 0, concluidas = 0, atrasadas = 0, atrasadasCliente = 0, emDia = 0, backlog = 0, retrabalho = 0, urgente = 0;
     ct.forEach(t => {
       const s = classifyTask(t);
       if (s === "concluida") concluidas++;
       else if (s === "atraso") atrasadas++;
+      else if (s === "atraso_cliente") atrasadasCliente++;
       else if (s === "em_dia") emDia++;
       else if (s === "backlog") backlog++;
       else if (s === "retrabalho") retrabalho++;
@@ -64,6 +65,7 @@ function buildClientMetricsFromTasks(tasks: TaskrowTask[], clients?: TaskrowClie
       andamento,
       concluidas,
       atrasadas,
+      atrasadasCliente,
       emDia,
       backlog,
       retrabalho,
@@ -107,6 +109,7 @@ export default function ClientsView() {
     clients: metrics.length,
     open: metrics.reduce((s, m) => s + m.total - m.concluidas, 0),
     atraso: metrics.reduce((s, m) => s + m.atrasadas, 0),
+    atrasoCliente: metrics.reduce((s, m) => s + m.atrasadasCliente, 0),
     retrabalho: metrics.reduce((s, m) => s + m.retrabalho, 0),
     urgente: metrics.reduce((s, m) => s + m.urgente, 0),
   }), [metrics]);
@@ -132,10 +135,11 @@ export default function ClientsView() {
           {Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-24 rounded-xl" />)}
         </div>
       ) : (
-        <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-6">
           <KPICard label="CLIENTES" value={totals.clients} color="indigo" size="sm" bgColored={false} />
           <KPICard label="TASKS ABERTAS" value={totals.open} color="indigo" size="sm" bgColored />
-          <KPICard label="EM ATRASO" value={totals.atraso} color="red" size="sm" bgColored />
+          <KPICard label="ATRASO CRT" value={totals.atraso} color="red" size="sm" bgColored />
+          <KPICard label="AG. CLIENTE" value={totals.atrasoCliente} color="purple" size="sm" bgColored />
           <KPICard label="RETRABALHO" value={totals.retrabalho} color="amber" size="sm" bgColored />
           <KPICard label="URGENTES" value={totals.urgente} color={totals.urgente > 0 ? "red" : "dark"} size="sm" bgColored={totals.urgente > 0} />
         </div>
@@ -157,7 +161,8 @@ export default function ClientsView() {
               <TableHead className="cursor-pointer text-right" onClick={() => handleSort("total")}>TOTAL <SortIcon col="total" /></TableHead>
               <TableHead className="cursor-pointer text-right" onClick={() => handleSort("andamento")}>ANDAMENTO <SortIcon col="andamento" /></TableHead>
               <TableHead className="cursor-pointer text-right" onClick={() => handleSort("concluidas")}>CONCLUÍDAS <SortIcon col="concluidas" /></TableHead>
-              <TableHead className="cursor-pointer text-right" onClick={() => handleSort("atrasadas")}>ATRASADAS <SortIcon col="atrasadas" /></TableHead>
+              <TableHead className="cursor-pointer text-right" onClick={() => handleSort("atrasadas")}>ATRASO CRT <SortIcon col="atrasadas" /></TableHead>
+              <TableHead className="cursor-pointer text-right" onClick={() => handleSort("atrasadasCliente")}>AG. CLIENTE <SortIcon col="atrasadasCliente" /></TableHead>
               <TableHead className="cursor-pointer text-right" onClick={() => handleSort("emDia")}>NO PRAZO <SortIcon col="emDia" /></TableHead>
               <TableHead className="cursor-pointer text-right" onClick={() => handleSort("backlog")}>BACKLOG <SortIcon col="backlog" /></TableHead>
               <TableHead className="cursor-pointer text-right" onClick={() => handleSort("retrabalho")}>RETRAB. <SortIcon col="retrabalho" /></TableHead>
@@ -170,7 +175,7 @@ export default function ClientsView() {
             {loading
               ? Array.from({ length: 6 }).map((_, i) => (
                   <TableRow key={i}>
-                    {Array.from({ length: 11 }).map((_, j) => (
+                    {Array.from({ length: 12 }).map((_, j) => (
                       <TableCell key={j}><Skeleton className="h-4 w-full" /></TableCell>
                     ))}
                   </TableRow>
@@ -193,6 +198,13 @@ export default function ClientsView() {
                     <TableCell className="text-right">
                       {m.atrasadas > 0 ? (
                         <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-destructive/10 text-xs font-bold text-destructive">{m.atrasadas}</span>
+                      ) : (
+                        <span className="text-muted-foreground">0</span>
+                      )}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {m.atrasadasCliente > 0 ? (
+                        <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-status-atraso-cliente/10 text-xs font-bold text-status-atraso-cliente">{m.atrasadasCliente}</span>
                       ) : (
                         <span className="text-muted-foreground">0</span>
                       )}
