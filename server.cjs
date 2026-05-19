@@ -268,9 +268,10 @@ function serveFile(res, filePath) {
 
 function proxyTaskrow(req, res, rawUrl) {
   const targetPath = rawUrl.replace(/^\/taskrow-api/, "") || "/";
+  const apiKey = readConfig().taskrowApiKey || req.headers["__identifier"] || "";
   const headers = Object.assign({}, req.headers, {
     host: "crtcomunicacao.taskrow.com",
-    "__identifier": "xxupFiV-O-FQwfytv2-AuH8ji_t6gQP_CXFG0jw0ae0PA-Y8nLlJ-z8Nup00WGtUul1ZTYNYuZHK-QdlNoAkoldBU2URdP9gd8oeNvT7Tpg1"
+    "__identifier": apiKey,
   });
   delete headers["content-length"];
 
