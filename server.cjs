@@ -7,14 +7,14 @@ const path = require("path");
 const { randomUUID } = require("crypto");
 const { spawn } = require("child_process");
 
-const PORT = Number(process.env.PORT) || 8080;
+const PORT = Number(process.env.PORT) || 3000;
 const DIST_DIR = path.resolve(__dirname, "dist");
 const DATA_DIR = path.resolve(__dirname, "data");
 
 // ── Supabase config (pipeline history) ───────────────────────────────────────
-const SUPABASE_URL   = (process.env.VITE_SUPABASE_URL || "https://qfgzenoyfeijmzxrkqkx.supabase.co").replace(/\/$/, "");
-const SUPABASE_KEY   = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
-const SUPABASE_HOST  = SUPABASE_URL.replace("https://", "");
+const SUPABASE_URL = (process.env.VITE_SUPABASE_URL || "https://qfgzenoyfeijmzxrkqkx.supabase.co").replace(/\/$/, "");
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+const SUPABASE_HOST = SUPABASE_URL.replace("https://", "");
 
 // Steps que indicam que a tarefa está parada aguardando o cliente
 const CLIENT_BLOCKING_STEPS = [
@@ -89,11 +89,11 @@ async function sbReq(method, table, body, qs) {
   const bodyStr = body ? JSON.stringify(body) : null;
 
   const headers = {
-    "apikey":        SUPABASE_KEY,
+    "apikey": SUPABASE_KEY,
     "Authorization": `Bearer ${SUPABASE_KEY}`,
-    "Content-Type":  "application/json",
+    "Content-Type": "application/json",
   };
-  if (method === "POST")  headers["Prefer"] = "resolution=merge-duplicates,return=minimal";
+  if (method === "POST") headers["Prefer"] = "resolution=merge-duplicates,return=minimal";
   if (method === "PATCH") headers["Prefer"] = "return=minimal";
   if (bodyStr) headers["Content-Length"] = String(Buffer.byteLength(bodyStr));
 
@@ -130,7 +130,7 @@ async function sbFetchAll(table, select) {
   while (true) {
     const rows = await sbReq("GET", table, null, {
       select,
-      limit:  String(PAGE),
+      limit: String(PAGE),
       offset: String(offset),
     });
     if (!Array.isArray(rows) || !rows.length) break;
