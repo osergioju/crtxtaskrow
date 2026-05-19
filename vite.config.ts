@@ -436,18 +436,18 @@ function analyticsApiPlugin() {
 // ─── Vite Config ──────────────────────────────────────────────────────────────
 
 export default defineConfig(({ mode }) => ({
-  base: "/v2/",
+  base: "/",
 
   server: {
     host: "::",
     port: 8080,
     hmr: { overlay: false },
     proxy: {
-      "/v2/taskrow-api": {
+      "/taskrow-api": {
         target: "https://crtcomunicacao.taskrow.com",
         changeOrigin: true,
         secure: true,
-        rewrite: (p) => p.replace(/^\/v2\/taskrow-api/, ""),
+        rewrite: (p) => p.replace(/^\/taskrow-api/, ""),
       },
     },
   },

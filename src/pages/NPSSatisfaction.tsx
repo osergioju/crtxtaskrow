@@ -20,7 +20,7 @@ function currentQuarterLabel() {
 }
 
 function npsLink(token: string) {
-  return `${window.location.origin}/v2/nps/respond/${token}`;
+  return `${window.location.origin}/nps/respond/${token}`;
 }
 
 function NpsScoreBadge({ clientId }: { clientId: string }) {

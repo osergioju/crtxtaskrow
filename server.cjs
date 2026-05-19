@@ -620,26 +620,10 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    // Static files under /v2/
-    if (urlPath.startsWith("/v2/")) {
-      const rel = urlPath.slice(4); // strip leading /v2/
-      if (rel && rel !== "/") {
-        const filePath = path.join(DIST_DIR, rel);
-        if (serveFile(res, filePath)) return;
-      }
-      // SPA fallback → index.html
-      serveFile(res, path.join(DIST_DIR, "index.html"));
-      return;
-    }
-
-    // Root redirect
-    if (urlPath === "/" || urlPath === "") {
-      res.writeHead(302, { Location: "/v2/" });
-      res.end();
-      return;
-    }
-
-    sendJson(res, 404, { error: "Not found" });
+    // Static files — serve from dist root, SPA fallback to index.html
+    const filePath = path.join(DIST_DIR, urlPath);
+    if (urlPath !== "/" && serveFile(res, filePath)) return;
+    serveFile(res, path.join(DIST_DIR, "index.html"));
   } catch (err) {
     console.error("[server]", err);
     if (!res.headersSent) sendJson(res, 500, { error: "Internal server error" });

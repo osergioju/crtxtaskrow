@@ -8,8 +8,7 @@ async function taskrowFetch(path: string, options: { method?: string; body?: str
   const apiKey = useDashboardStore.getState().apiKey;
   const method = options.method || "GET";
 
-  const basePath = window.location.pathname.startsWith("/v2") ? "/v2" : "";
-  const url = new URL(`${window.location.origin}${basePath}/taskrow-api${path}`);
+  const url = new URL(`${window.location.origin}/taskrow-api${path}`);
   if (options.params) {
     Object.entries(options.params).forEach(([k, v]) => {
       if (v != null) url.searchParams.append(k, String(v));

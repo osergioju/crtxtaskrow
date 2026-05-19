@@ -48,7 +48,7 @@ const App = () => (
     <TooltipProvider>
       <Toaster />
       <Sonner />
-      <BrowserRouter basename="/v2">
+      <BrowserRouter>
         <Routes>
           {/* Rota pública — sem AppShell (sidebar/topbar) */}
           <Route path="/nps/respond/:token" element={<NPSRespond />} />
