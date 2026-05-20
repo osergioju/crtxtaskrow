@@ -156,9 +156,12 @@ def _delay_alerts(cid, name, row) -> list[Alert]:
     pct = int(late * 100)
 
     avg_delay = row.get("avg_delay_days")
-    desc = f"Taxa de atraso em {pct}% das demandas."
+    awaiting = int(row.get("awaiting_approval", 0) or 0)
+    desc = f"Taxa de atraso interno em {pct}% das demandas (exclui tarefas em aprovação do cliente)."
     if avg_delay is not None and not pd.isna(avg_delay):
-        desc += f" Atraso médio de {float(avg_delay):.0f} dias nas entregas em atraso."
+        desc += f" Atraso médio de {float(avg_delay):.0f} dias."
+    if awaiting > 0:
+        desc += f" {awaiting} tarefa{'s' if awaiting > 1 else ''} aguardando aprovação do cliente."
 
     return [Alert(
         type="delay_spike",

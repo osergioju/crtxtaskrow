@@ -117,6 +117,7 @@ def _build_clients(features, health_map, pred_map) -> list[dict]:
             "demand_growth_rate":     _safe(feat.get("demand_growth_rate")),
             "late_demands":           _safe(feat.get("late_demands")),
             "late_ratio":             _safe(feat.get("late_ratio")),
+            "awaiting_approval":      _safe(feat.get("awaiting_approval")),
             "sla":                    _safe(feat.get("sla")),
             "avg_delivery_time_days": _safe(feat.get("avg_delivery_time_days")),
             "avg_delay_days":         _safe(feat.get("avg_delay_days")),

@@ -90,6 +90,7 @@ def _demand_features(d: pd.DataFrame, cutoff_30: pd.Timestamp, cutoff_60: pd.Tim
             "demand_growth_rate": 0.0,
             "late_demands": 0,
             "late_ratio": 0.0,
+            "awaiting_approval": 0,
             "sla": 1.0,
             "avg_delivery_time_days": None,
             "avg_delay_days": None,
@@ -102,6 +103,7 @@ def _demand_features(d: pd.DataFrame, cutoff_30: pd.Timestamp, cutoff_60: pd.Tim
     prev_30 = d[(d["created_at"] >= cutoff_60) & (d["created_at"] < cutoff_30)]
 
     late_demands = d[d["status"] == "late"]
+    awaiting_approval = d[d["status"] == "awaiting_approval"]
 
     # Tempo de entrega (só demandas fechadas com ambas as datas)
     delivery_mask = closed["delivered_at"].notna() & closed["created_at"].notna()
@@ -142,6 +144,7 @@ def _demand_features(d: pd.DataFrame, cutoff_30: pd.Timestamp, cutoff_60: pd.Tim
         "demand_growth_rate": round(growth, 4),
         "late_demands": len(late_demands),
         "late_ratio": round(_safe_ratio(len(late_demands), len(d)), 4),
+        "awaiting_approval": len(awaiting_approval),
         "sla": round(_safe_ratio(len(d[d["status"] == "on_time"]), max(1, len(d[d["status"].isin(["on_time", "late"])]))), 4),
         "avg_delivery_time_days": round(avg_delivery, 2) if avg_delivery is not None else None,
         "avg_delay_days": round(avg_delay, 2) if avg_delay is not None else None,

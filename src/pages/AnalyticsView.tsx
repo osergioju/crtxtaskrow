@@ -222,7 +222,7 @@ function NpsScatterChart({ clients }: { clients: AnalyticsClient[] }) {
     <ResponsiveContainer width="100%" height={260}>
       <ScatterChart margin={{ left: 4, right: 16, top: 4, bottom: 4 }}>
         <CartesianGrid strokeDasharray="3 3" />
-        <XAxis dataKey="x" name="Atraso %" unit="%" tick={{ fontSize: 11 }} label={{ value: "Taxa de Atraso (%)", position: "insideBottom", offset: -2, fontSize: 11 }} />
+        <XAxis dataKey="x" name="Atraso interno %" unit="%" tick={{ fontSize: 11 }} label={{ value: "Atraso Interno % (excl. aprovação cliente)", position: "insideBottom", offset: -2, fontSize: 11 }} />
         <YAxis dataKey="y" name="NPS" domain={[0, 10]} tick={{ fontSize: 11 }} label={{ value: "NPS Médio", angle: -90, position: "insideLeft", fontSize: 11 }} />
         <Tooltip cursor={{ strokeDasharray: "3 3" }} content={({ payload }) => {
           if (!payload?.length) return null;
@@ -320,7 +320,8 @@ function ClientTable({ clients }: { clients: AnalyticsClient[] }) {
             <th className="py-2 pr-3 text-center font-medium">Tendência</th>
             <th className="py-2 pr-3 text-right font-medium">Detrator</th>
             <th className="py-2 pr-3 text-right font-medium">SLA</th>
-            <th className="py-2 pr-3 text-right font-medium">Atraso</th>
+            <th className="py-2 pr-3 text-right font-medium" title="Atraso interno (exclui aprovação do cliente)">Atraso</th>
+            <th className="py-2 pr-3 text-right font-medium" title="Tarefas aguardando aprovação do cliente">Aprovação</th>
             <th className="py-2 text-right font-medium">Demandas</th>
           </tr>
         </thead>
@@ -358,6 +359,13 @@ function ClientTable({ clients }: { clients: AnalyticsClient[] }) {
                 </td>
                 <td className="py-2 pr-3 text-right">{pct(c.sla)}</td>
                 <td className="py-2 pr-3 text-right">{pct(c.late_ratio)}</td>
+                <td className="py-2 pr-3 text-right">
+                  {c.awaiting_approval != null && c.awaiting_approval > 0 ? (
+                    <span className="text-amber-600 font-medium">{c.awaiting_approval}</span>
+                  ) : (
+                    <span className="text-muted-foreground">—</span>
+                  )}
+                </td>
                 <td className="py-2 text-right">{c.total_demands}</td>
               </tr>
             );

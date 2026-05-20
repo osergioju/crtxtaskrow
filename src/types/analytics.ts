@@ -36,6 +36,7 @@ export interface AnalyticsClient {
   total_demands: number;
   demands_last_30d: number;
   late_ratio: number | null;
+  awaiting_approval: number | null;
   sla: number | null;
   avg_delivery_time_days: number | null;
   avg_delay_days: number | null;

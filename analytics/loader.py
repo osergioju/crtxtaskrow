@@ -17,6 +17,13 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+# Pipeline steps que são responsabilidade do cliente (não contam como atraso da agência)
+_CLIENT_APPROVAL_STEPS = {
+    "aprovação",
+    "aprovação externa",
+    "aprovação do cliente",
+}
+
 # ── Caminhos padrão ────────────────────────────────────────────────────────────
 
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -97,13 +104,19 @@ def load_demands(path: str | Path) -> pd.DataFrame:
         deadline = _strip_tz(deadline)
 
         # Status
+        pipeline_step = (t.get("pipelineStep") or "").strip().lower()
+        in_client_approval = pipeline_step in _CLIENT_APPROVAL_STEPS
+
         if closed:
             if pd.notna(deadline) and pd.notna(delivered) and delivered > deadline:
                 status = "late"
             else:
                 status = "on_time"
         else:
-            if pd.notna(deadline) and deadline < now:
+            if in_client_approval:
+                # Tarefa aguardando aprovação do cliente — prazo vencido não é culpa da agência
+                status = "awaiting_approval"
+            elif pd.notna(deadline) and deadline < now:
                 status = "late"
             else:
                 status = "in_progress"
