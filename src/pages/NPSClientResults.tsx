@@ -99,6 +99,12 @@ export default function NPSClientResults() {
 
   const npsData = responses ? calcNPS(responses) : null;
   const averages = responses ? calcAverages(responses) : [];
+  const npsAvg = averages.find((q) => q.id === "q1") ?? null;
+  const satisfactionAvgs = averages.filter((q) => q.id !== "q1");
+  const satisfactionVals = satisfactionAvgs.filter((q) => q.avg !== null).map((q) => q.avg!);
+  const satisfactionMean = satisfactionVals.length > 0
+    ? satisfactionVals.reduce((a, b) => a + b, 0) / satisfactionVals.length
+    : null;
 
   return (
     <div>
@@ -161,8 +167,11 @@ export default function NPSClientResults() {
                   Score NPS
                 </CardTitle>
               </CardHeader>
-              <CardContent className="flex items-center justify-center py-4">
+              <CardContent className="flex flex-col items-center gap-2 py-4">
                 {npsData && <NpsGauge score={npsData.nps} />}
+                <p className="text-[0.65rem] text-center text-muted-foreground leading-relaxed max-w-[200px]">
+                  Baseado na pergunta de recomendação
+                </p>
               </CardContent>
             </Card>
 
@@ -194,11 +203,52 @@ export default function NPSClientResults() {
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
-                Média por Pergunta
+                Médias
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
-              {averages.map((q) => (
+              {/* NPS question highlighted */}
+              {npsAvg && (
+                <div className="rounded-lg border border-primary/20 bg-primary/5 p-2.5 space-y-2">
+                  <div className="flex items-center gap-1.5">
+                    <Badge variant="outline" className="text-[0.6rem] h-4 px-1.5 bg-primary/10 text-primary border-primary/30 font-bold">
+                      NPS
+                    </Badge>
+                    <span className="text-[0.65rem] text-muted-foreground uppercase tracking-wide font-medium">
+                      Pergunta de recomendação
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <p className="text-xs flex-1 min-w-0 truncate text-foreground/80">{npsAvg.label}</p>
+                    {npsAvg.avg !== null && (
+                      <div className="flex items-center gap-2 shrink-0">
+                        <div className="w-24 h-1.5 rounded-full bg-muted overflow-hidden">
+                          <div
+                            className={`h-full rounded-full ${npsAvg.avg >= 9 ? "bg-emerald-500" : npsAvg.avg >= 7 ? "bg-amber-400" : "bg-red-500"}`}
+                            style={{ width: `${(npsAvg.avg / 10) * 100}%` }}
+                          />
+                        </div>
+                        <span className="w-8 text-right text-xs font-bold">{npsAvg.avg.toFixed(1)}</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Separator with satisfaction average */}
+              <div className="flex items-center gap-2 pt-1">
+                <div className="flex-1 h-px bg-border" />
+                <span className="text-[0.65rem] text-muted-foreground uppercase tracking-wide whitespace-nowrap">
+                  Satisfação Geral
+                  {satisfactionMean !== null && (
+                    <span className="ml-1.5 font-bold text-foreground">{satisfactionMean.toFixed(1)}</span>
+                  )}
+                </span>
+                <div className="flex-1 h-px bg-border" />
+              </div>
+
+              {/* Satisfaction questions */}
+              {satisfactionAvgs.map((q) => (
                 <div key={q.id} className="flex items-center gap-3">
                   <div className="flex-1 min-w-0">
                     <p className="text-xs truncate text-muted-foreground">{q.label}</p>
