@@ -167,11 +167,30 @@ export default function NPSClientResults() {
                   Score NPS
                 </CardTitle>
               </CardHeader>
-              <CardContent className="flex flex-col items-center gap-2 py-4">
+              <CardContent className="flex flex-col items-center gap-3 py-4">
                 {npsData && <NpsGauge score={npsData.nps} />}
-                <p className="text-[0.65rem] text-center text-muted-foreground leading-relaxed max-w-[200px]">
-                  Baseado na pergunta de recomendação
-                </p>
+                {npsAvg && npsAvg.avg !== null && (() => {
+                  const isPromoter = npsAvg.avg >= 9;
+                  const isNeutral = npsAvg.avg >= 7 && npsAvg.avg < 9;
+                  const label = isPromoter ? "Promotor" : isNeutral ? "Neutro" : "Detrator";
+                  const labelColor = isPromoter ? "text-emerald-600" : isNeutral ? "text-amber-600" : "text-red-600";
+                  return (
+                    <div className="text-center space-y-1 border rounded-lg px-3 py-2 bg-muted/40 max-w-[220px] w-full">
+                      <p className="text-[0.68rem] text-muted-foreground">
+                        Nota <span className="font-bold text-foreground">{npsAvg.avg.toFixed(0)}</span> na recomendação
+                        {" → "}
+                        <span className={`font-semibold ${labelColor}`}>{label}</span>
+                      </p>
+                      {satisfactionMean !== null && (
+                        <p className="text-[0.68rem] text-muted-foreground">
+                          Satisfação geral:{" "}
+                          <span className="font-bold text-foreground">{satisfactionMean.toFixed(1)}</span>
+                          <span className="text-muted-foreground"> (demais perguntas)</span>
+                        </p>
+                      )}
+                    </div>
+                  );
+                })()}
               </CardContent>
             </Card>
 
