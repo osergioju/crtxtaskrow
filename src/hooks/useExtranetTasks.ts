@@ -11,7 +11,7 @@ export function useExtranetTasks(clientID?: number | null) {
 
   const filteredTasks = useMemo((): TaskrowTask[] => {
     if (!allTasks) return [];
-    const open = allTasks.filter(t => !t.closed);
+    const open = allTasks.filter(t => !t.closed && t.parentTaskID === null);
     if (!clientID) return open;
     return open.filter(t => t.clientID === clientID);
   }, [allTasks, clientID]);
