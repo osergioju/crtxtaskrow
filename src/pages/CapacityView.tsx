@@ -16,6 +16,7 @@ import { CapacityClientPanel } from "@/components/capacity/CapacityClientPanel";
 import { CapacitySimulator } from "@/components/capacity/CapacitySimulator";
 import { CapacityForecast } from "@/components/capacity/CapacityForecast";
 import { CapacityZonePill } from "@/components/capacity/CapacityZonePill";
+import { CapacityGuide } from "@/components/capacity/CapacityGuide";
 import { ZONE_CONFIG, scoreToZone } from "@/lib/capacityEngine";
 import { useCapacityData } from "@/hooks/useCapacityData";
 import { useCapacityStore } from "@/store/capacityStore";
@@ -238,6 +239,9 @@ export default function CapacityView() {
                   <CapacityMonthDetail ps={selectedScore} />
                 </div>
               )}
+
+              {/* Explanatory guide */}
+              <CapacityGuide />
             </TabsContent>
 
             {/* ─── Forecast Tab ─────────────────────────────────────────────── */}
