@@ -17,6 +17,7 @@ import NPSSatisfaction from "./pages/NPSSatisfaction";
 import NPSClientResults from "./pages/NPSClientResults";
 import NPSRespond from "./pages/NPSRespond";
 import AnalyticsView from "./pages/AnalyticsView";
+import ExtranetView from "./pages/ExtranetView";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -37,6 +38,7 @@ function InternalApp() {
         <Route path="/nps" element={<NPSSatisfaction />} />
         <Route path="/nps/resultados/:clientId" element={<NPSClientResults />} />
         <Route path="/analytics" element={<AnalyticsView />} />
+        <Route path="/extranet" element={<ExtranetView />} />
         <Route path="*" element={<NotFound />} />
       </Routes>
     </AppShell>

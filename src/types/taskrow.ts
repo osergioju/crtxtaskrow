@@ -45,17 +45,45 @@ export interface TaskrowTask {
   closeDate: string | null;
   dueDate: string | null;
   pipelineStep: string;
+  colorID: number | null;
   tags: string | null;
   parentTaskID: number | null;
   parentTaskNumber: number | null;
+  parentTaskTitle: string | null;
   jobID: number;
   jobNumber: number;
+  jobTypeID: number | null;
   jobTitle: string;
+  jobType: string | null;
+  jobUrlData: string | null;
+  jobDisplayTitle: string | null;
   clientID: number;
   clientDisplayName: string;
   clientNickName: string;
+  clientUrlData: string | null;
   ownerUserID: number;
   ownerUserLogin: string;
+  ownerUserHashCode: string | null;
+  creationUserID: number | null;
+  creationUserLogin: string | null;
+  creationUserHashCode: string | null;
+  requestTypeAcronym: string | null;
+  requestTypeName: string | null;
+  /** Pipeline step as seen by the client (extranet) */
+  extranetPipelineStep: string | null;
+  /** Color ID corresponding to the extranet pipeline step */
+  extranetColorID: number | null;
+  hasExternalItems: boolean;
+  urlData: string | null;
+  absoluteUserOrder: number | null;
+  clientContactID: number | null;
+  contactName: string | null;
+  contactEmail: string | null;
+  contactRequestDate: string | null;
+  currentlyOpen: boolean;
+  openInPeriod: boolean;
+  closedInPeriod: boolean;
+  openAndClosedInPeriod: boolean;
 }
 
 export interface AdvancedSearchPayload {
