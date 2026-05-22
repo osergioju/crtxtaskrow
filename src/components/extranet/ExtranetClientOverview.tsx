@@ -1,6 +1,5 @@
 import { useMemo } from "react";
-import { useNavigate } from "react-router-dom";
-import { Building2, ChevronRight, Clock } from "lucide-react";
+import { Building2, ChevronRight, Clock, Kanban } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
@@ -78,9 +77,10 @@ interface ExtranetClientOverviewProps {
   summaries: ExtranetClientSummary[];
   isLoading?: boolean;
   onSelect: (clientID: number) => void;
+  onViewAll?: () => void;
 }
 
-export function ExtranetClientOverview({ summaries, isLoading, onSelect }: ExtranetClientOverviewProps) {
+export function ExtranetClientOverview({ summaries, isLoading, onSelect, onViewAll }: ExtranetClientOverviewProps) {
   const totalApproval = useMemo(() => summaries.reduce((s, c) => s + c.pendingApproval, 0), [summaries]);
   const totalTasks = useMemo(() => summaries.reduce((s, c) => s + c.totalTasks, 0), [summaries]);
 
@@ -119,6 +119,26 @@ export function ExtranetClientOverview({ summaries, isLoading, onSelect }: Extra
 
       {/* Client grid */}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+        {/* View All card */}
+        {onViewAll && (
+          <Card
+            className="cursor-pointer border-2 border-dashed border-primary/30 bg-primary/[0.03] transition-all duration-150 hover:shadow-md hover:-translate-y-0.5 hover:border-primary/50 active:translate-y-0"
+            onClick={onViewAll}
+          >
+            <CardContent className="flex flex-col items-center justify-center gap-3 p-6 h-full min-h-[120px]">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10">
+                <Kanban className="h-5 w-5 text-primary" />
+              </div>
+              <div className="text-center">
+                <p className="text-sm font-bold text-primary">Todos os Clientes</p>
+                <p className="text-[0.65rem] text-muted-foreground mt-0.5">
+                  Ver kanban completo · {totalTasks} tarefas
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
         {summaries.map(s => (
           <ClientCard
             key={s.clientID}

@@ -1,9 +1,9 @@
 import { useState, useMemo } from "react";
-import { ArrowLeft, RefreshCw, Globe } from "lucide-react";
+import { ArrowLeft, RefreshCw, Globe, AlertTriangle, Clock, CalendarClock, CheckCircle2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Badge } from "@/components/ui/badge";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { QueryErrorState } from "@/components/shared/QueryStates";
 import { useExtranetTasks } from "@/hooks/useExtranetTasks";
@@ -14,13 +14,158 @@ import { ExtranetActivityFeed } from "@/components/extranet/ExtranetActivityFeed
 import { ExtranetFilters } from "@/components/extranet/ExtranetFilters";
 import { ExtranetClientOverview } from "@/components/extranet/ExtranetClientOverview";
 import { filterTasks, groupTasksByExtranetStep } from "@/lib/extranet";
+import { format, isToday, isPast, parseISO } from "date-fns";
+import { ptBR } from "date-fns/locale";
 import type { ExtranetFiltersState, ExtranetStep } from "@/types/extranet";
+import type { TaskrowTask } from "@/types/taskrow";
 import { cn } from "@/lib/utils";
+
+// ─── Daily Priority Alerts ────────────────────────────────────────────────────
+
+interface PriorityClient {
+  clientID: number;
+  clientName: string;
+  overdueCount: number;
+  dueTodayCount: number;
+  approvalCount: number;
+  score: number;
+}
+
+function buildDailyPriorities(tasks: TaskrowTask[]): PriorityClient[] {
+  const map = new Map<number, PriorityClient>();
+
+  tasks.forEach(t => {
+    if (!map.has(t.clientID)) {
+      map.set(t.clientID, {
+        clientID: t.clientID,
+        clientName: t.clientNickName || t.clientDisplayName,
+        overdueCount: 0,
+        dueTodayCount: 0,
+        approvalCount: 0,
+        score: 0,
+      });
+    }
+    const entry = map.get(t.clientID)!;
+
+    const step = (t.extranetPipelineStep || "").toLowerCase();
+    if (step.includes("aprovação") || step.includes("aprovacao")) entry.approvalCount++;
+
+    if (t.dueDate) {
+      const due = parseISO(t.dueDate);
+      if (isToday(due)) entry.dueTodayCount++;
+      else if (isPast(due)) entry.overdueCount++;
+    }
+  });
+
+  map.forEach(e => {
+    e.score = e.overdueCount * 3 + e.dueTodayCount * 2 + e.approvalCount * 1;
+  });
+
+  return Array.from(map.values())
+    .filter(e => e.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 5);
+}
+
+interface DailyPrioritiesProps {
+  tasks: TaskrowTask[];
+  isLoading: boolean;
+  onClientClick: (id: number) => void;
+}
+
+function DailyPriorities({ tasks, isLoading, onClientClick }: DailyPrioritiesProps) {
+  const today = format(new Date(), "EEEE, dd 'de' MMMM", { locale: ptBR });
+  const priorities = useMemo(() => buildDailyPriorities(tasks), [tasks]);
+
+  if (isLoading) {
+    return (
+      <div className="space-y-2">
+        <Skeleton className="h-4 w-48" />
+        <div className="flex gap-2 flex-wrap">
+          {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-10 w-48 rounded-xl" />)}
+        </div>
+      </div>
+    );
+  }
+
+  if (priorities.length === 0) return null;
+
+  return (
+    <div className="rounded-xl border border-amber-200 bg-amber-50/60 p-4">
+      <div className="flex items-center gap-2 mb-3">
+        <CalendarClock className="h-4 w-4 text-amber-600" />
+        <p className="text-sm font-bold text-amber-800">
+          Prioridades para hoje
+        </p>
+        <span className="ml-auto text-[0.65rem] text-amber-600 capitalize">{today}</span>
+      </div>
+
+      <div className="flex flex-wrap gap-2">
+        {priorities.map(p => {
+          const isUrgent = p.overdueCount > 0;
+          const hasDueToday = p.dueTodayCount > 0;
+          const hasApproval = p.approvalCount > 0;
+
+          return (
+            <button
+              key={p.clientID}
+              className={cn(
+                "flex items-center gap-2 rounded-xl border px-3 py-2 text-left transition-all",
+                "hover:shadow-sm hover:-translate-y-0.5 active:translate-y-0",
+                isUrgent
+                  ? "border-destructive/30 bg-destructive/5 hover:bg-destructive/10"
+                  : hasDueToday
+                    ? "border-amber-300 bg-amber-50 hover:bg-amber-100"
+                    : "border-violet-200 bg-violet-50 hover:bg-violet-100"
+              )}
+              onClick={() => onClientClick(p.clientID)}
+            >
+              {/* Icon */}
+              {isUrgent
+                ? <AlertTriangle className="h-3.5 w-3.5 text-destructive shrink-0" />
+                : hasDueToday
+                  ? <Clock className="h-3.5 w-3.5 text-amber-600 shrink-0" />
+                  : <CheckCircle2 className="h-3.5 w-3.5 text-violet-600 shrink-0" />
+              }
+
+              {/* Client name */}
+              <span className={cn(
+                "text-xs font-semibold",
+                isUrgent ? "text-destructive" : hasDueToday ? "text-amber-800" : "text-violet-700"
+              )}>
+                {p.clientName}
+              </span>
+
+              {/* Badges */}
+              <div className="flex gap-1">
+                {p.overdueCount > 0 && (
+                  <Badge variant="outline" className="h-4 px-1.5 text-[0.58rem] border-destructive/30 text-destructive bg-destructive/5">
+                    {p.overdueCount} atrasada{p.overdueCount > 1 ? "s" : ""}
+                  </Badge>
+                )}
+                {p.dueTodayCount > 0 && (
+                  <Badge variant="outline" className="h-4 px-1.5 text-[0.58rem] border-amber-300 text-amber-700 bg-amber-50">
+                    {p.dueTodayCount} hoje
+                  </Badge>
+                )}
+                {p.approvalCount > 0 && (
+                  <Badge variant="outline" className="h-4 px-1.5 text-[0.58rem] border-violet-200 text-violet-700 bg-violet-50">
+                    {p.approvalCount} aprovação
+                  </Badge>
+                )}
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 // ─── Client Detail View ────────────────────────────────────────────────────────
 
 interface ClientDetailViewProps {
-  clientID: number;
+  clientID: number | null; // null = all clients
   onBack: () => void;
 }
 
@@ -29,8 +174,11 @@ function ClientDetailView({ clientID, onBack }: ClientDetailViewProps) {
   const [activeTab, setActiveTab] = useState("kanban");
   const [filters, setFilters] = useState<ExtranetFiltersState>({ search: "", step: "all" });
 
-  const summary = clientSummaries.find(s => s.clientID === clientID);
-  const clientName = summary?.clientName || tasks[0]?.clientDisplayName || `Cliente ${clientID}`;
+  const isAllClients = clientID === null;
+  const summary = clientID !== null ? clientSummaries.find(s => s.clientID === clientID) : null;
+  const clientName = isAllClients
+    ? "Todos os Clientes"
+    : summary?.clientName || tasks[0]?.clientDisplayName || `Cliente ${clientID}`;
 
   const filteredTasks = useMemo(() => filterTasks(tasks, filters.search, filters.step), [tasks, filters]);
   const filteredByStep = useMemo(() => groupTasksByExtranetStep(filteredTasks), [filteredTasks]);
@@ -46,7 +194,7 @@ function ClientDetailView({ clientID, onBack }: ClientDetailViewProps) {
       <div>
         <Button variant="ghost" size="sm" className="mb-4 gap-2 text-muted-foreground" onClick={onBack}>
           <ArrowLeft className="h-4 w-4" />
-          Todos os clientes
+          Voltar
         </Button>
         <QueryErrorState error={error as Error} onRetry={refetch} />
       </div>
@@ -55,12 +203,12 @@ function ClientDetailView({ clientID, onBack }: ClientDetailViewProps) {
 
   return (
     <div className="space-y-5">
-      {/* Back + client name */}
+      {/* Back + title */}
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-3 min-w-0">
           <Button variant="ghost" size="sm" className="gap-1.5 text-muted-foreground shrink-0" onClick={onBack}>
             <ArrowLeft className="h-4 w-4" />
-            Todos
+            Voltar
           </Button>
           <div className="h-4 w-px bg-border" />
           <div className="min-w-0">
@@ -82,22 +230,22 @@ function ClientDetailView({ clientID, onBack }: ClientDetailViewProps) {
         </Button>
       </div>
 
-      {/* KPIs */}
-      {isLoading ? (
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-          {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-24 rounded-xl" />)}
-        </div>
-      ) : summary ? (
-        <ExtranetKPIs summary={summary} onStepClick={handleStepClick} />
-      ) : null}
+      {/* KPIs — só mostra quando há um cliente específico */}
+      {!isAllClients && (
+        isLoading ? (
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+            {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-24 rounded-xl" />)}
+          </div>
+        ) : summary ? (
+          <ExtranetKPIs summary={summary} onStepClick={handleStepClick} />
+        ) : null
+      )}
 
       {/* Tabs */}
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <TabsList className="h-9 gap-0.5 bg-muted/60 p-1">
-            <TabsTrigger value="kanban" className="h-7 text-xs px-3">
-              Pipeline
-            </TabsTrigger>
+            <TabsTrigger value="kanban" className="h-7 text-xs px-3">Pipeline</TabsTrigger>
             <TabsTrigger value="aprovacoes" className="h-7 text-xs px-3 relative">
               Aprovações
               {approvalTasks.length > 0 && (
@@ -106,12 +254,8 @@ function ClientDetailView({ clientID, onBack }: ClientDetailViewProps) {
                 </span>
               )}
             </TabsTrigger>
-            <TabsTrigger value="atividades" className="h-7 text-xs px-3">
-              Atividade
-            </TabsTrigger>
-            <TabsTrigger value="lista" className="h-7 text-xs px-3">
-              Lista
-            </TabsTrigger>
+            <TabsTrigger value="atividades" className="h-7 text-xs px-3">Atividade</TabsTrigger>
+            <TabsTrigger value="lista" className="h-7 text-xs px-3">Lista</TabsTrigger>
           </TabsList>
 
           {(activeTab === "kanban" || activeTab === "lista") && (
@@ -124,11 +268,7 @@ function ClientDetailView({ clientID, onBack }: ClientDetailViewProps) {
         </div>
 
         <TabsContent value="kanban" className="mt-4">
-          <ExtranetKanban
-            byStep={filteredByStep}
-            isLoading={isLoading}
-            onTaskClick={() => {}}
-          />
+          <ExtranetKanban byStep={filteredByStep} isLoading={isLoading} onTaskClick={() => {}} />
         </TabsContent>
 
         <TabsContent value="aprovacoes" className="mt-4">
@@ -149,13 +289,10 @@ function ClientDetailView({ clientID, onBack }: ClientDetailViewProps) {
 
 // ─── Task List View ────────────────────────────────────────────────────────────
 
-import { format, parseISO, isPast } from "date-fns";
-import { ptBR } from "date-fns/locale";
+import { format as dateFmt, parseISO as dParseISO, isPast as dIsPast } from "date-fns";
 import { ExternalLink, Calendar, User } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
 import { ExtranetStepBadge } from "@/components/extranet/ExtranetStepBadge";
 import { taskrowLink } from "@/lib/taskrowLink";
-import type { TaskrowTask } from "@/types/taskrow";
 
 function TaskListView({ tasks, isLoading }: { tasks: TaskrowTask[]; isLoading?: boolean }) {
   if (isLoading) {
@@ -179,8 +316,8 @@ function TaskListView({ tasks, isLoading }: { tasks: TaskrowTask[]; isLoading?: 
     <div className="space-y-1.5">
       {tasks.map(task => {
         const step = (task.extranetPipelineStep || "Backlog") as ExtranetStep;
-        const dueDate = task.dueDate ? parseISO(task.dueDate) : null;
-        const isOverdue = dueDate && isPast(dueDate) && !task.closed;
+        const dueDate = task.dueDate ? dParseISO(task.dueDate) : null;
+        const isOverdue = dueDate && dIsPast(dueDate) && !task.closed;
         const link = taskrowLink(task);
         return (
           <div
@@ -204,7 +341,7 @@ function TaskListView({ tasks, isLoading }: { tasks: TaskrowTask[]; isLoading?: 
                   isOverdue ? "text-destructive font-semibold" : "text-muted-foreground"
                 )}>
                   <Calendar className="h-2.5 w-2.5" />
-                  {format(dueDate, "dd/MM", { locale: ptBR })}
+                  {dateFmt(dueDate, "dd/MM", { locale: ptBR })}
                 </span>
               )}
               {task.ownerUserLogin && (
@@ -232,11 +369,14 @@ function TaskListView({ tasks, isLoading }: { tasks: TaskrowTask[]; isLoading?: 
 
 // ─── Main ExtranetView ─────────────────────────────────────────────────────────
 
+// selectedClientID: number = specific client, null = overview, "all" = global kanban
+type Selection = number | null | "all";
+
 export default function ExtranetView() {
-  const [selectedClientID, setSelectedClientID] = useState<number | null>(null);
+  const [selection, setSelection] = useState<Selection>(null);
   const [clientSearchQ, setClientSearchQ] = useState("");
 
-  const { clientSummaries, isLoading, error, refetch } = useExtranetTasks(null);
+  const { tasks, clientSummaries, isLoading, error, refetch } = useExtranetTasks(null);
 
   const filteredSummaries = useMemo(() => {
     if (!clientSearchQ.trim()) return clientSummaries;
@@ -247,11 +387,13 @@ export default function ExtranetView() {
     );
   }, [clientSummaries, clientSearchQ]);
 
-  if (selectedClientID !== null) {
+  // Show detail view for specific client OR global kanban
+  if (selection !== null) {
+    const clientID = selection === "all" ? null : selection;
     return (
       <ClientDetailView
-        clientID={selectedClientID}
-        onBack={() => setSelectedClientID(null)}
+        clientID={clientID}
+        onBack={() => setSelection(null)}
       />
     );
   }
@@ -294,25 +436,35 @@ export default function ExtranetView() {
         </div>
       </PageHeader>
 
-      {/* Client search for overview */}
+      {/* Daily priorities */}
+      {!isLoading && tasks.length > 0 && (
+        <div className="mb-4">
+          <DailyPriorities
+            tasks={tasks}
+            isLoading={isLoading}
+            onClientClick={id => setSelection(id)}
+          />
+        </div>
+      )}
+
+      {/* Client search */}
       {!isLoading && clientSummaries.length > 6 && (
         <div className="mb-4 max-w-xs">
-          <div className="relative">
-            <input
-              type="text"
-              placeholder="Filtrar cliente..."
-              value={clientSearchQ}
-              onChange={e => setClientSearchQ(e.target.value)}
-              className="w-full rounded-lg border bg-card px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring"
-            />
-          </div>
+          <input
+            type="text"
+            placeholder="Filtrar cliente..."
+            value={clientSearchQ}
+            onChange={e => setClientSearchQ(e.target.value)}
+            className="w-full rounded-lg border bg-card px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring"
+          />
         </div>
       )}
 
       <ExtranetClientOverview
         summaries={filteredSummaries}
         isLoading={isLoading}
-        onSelect={id => setSelectedClientID(id)}
+        onSelect={id => setSelection(id)}
+        onViewAll={() => setSelection("all")}
       />
     </div>
   );
