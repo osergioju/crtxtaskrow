@@ -164,8 +164,8 @@ export function calculatePeriodScore(
 
   const openCount = totalTasks - closedCount;
 
-  // Weighted load
-  let rawWeightedLoad = periodTasks.reduce((sum, t) => sum + taskWeight(t, period), 0);
+  // Weighted load — only open tasks pressure capacity; closed ones are done
+  let rawWeightedLoad = periodTasks.reduce((sum, t) => t.closed ? sum : sum + taskWeight(t, period), 0);
   rawWeightedLoad += extraWeight; // simulation adds
 
   // Active users in this period

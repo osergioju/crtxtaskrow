@@ -11,8 +11,9 @@ export function useExtranetTasks(clientID?: number | null) {
 
   const filteredTasks = useMemo((): TaskrowTask[] => {
     if (!allTasks) return [];
-    if (!clientID) return allTasks;
-    return allTasks.filter(t => t.clientID === clientID);
+    const open = allTasks.filter(t => !t.closed);
+    if (!clientID) return open;
+    return open.filter(t => t.clientID === clientID);
   }, [allTasks, clientID]);
 
   const byStep = useMemo(() => groupTasksByExtranetStep(filteredTasks), [filteredTasks]);
