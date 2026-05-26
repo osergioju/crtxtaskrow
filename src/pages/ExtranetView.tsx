@@ -268,7 +268,7 @@ function ClientDetailView({ clientID, onBack }: ClientDetailViewProps) {
         </div>
 
         <TabsContent value="kanban" className="mt-4">
-          <ExtranetKanban byStep={filteredByStep} isLoading={isLoading} onTaskClick={() => {}} />
+          <ExtranetKanban byStep={filteredByStep} isLoading={isLoading} onTaskClick={() => {}} showClient={isAllClients} />
         </TabsContent>
 
         <TabsContent value="aprovacoes" className="mt-4">

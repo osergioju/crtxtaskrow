@@ -26,9 +26,10 @@ interface KanbanColumnProps {
   collapsed: boolean;
   onToggle: () => void;
   onTaskClick?: (task: TaskrowTask) => void;
+  showClient?: boolean;
 }
 
-function KanbanColumn({ step, tasks, collapsed, onToggle, onTaskClick }: KanbanColumnProps) {
+function KanbanColumn({ step, tasks, collapsed, onToggle, onTaskClick, showClient }: KanbanColumnProps) {
   const config = EXTRANET_COLUMN_CONFIG[step];
   const [showAll, setShowAll] = useState(false);
   const PREVIEW_COUNT = 8;
@@ -93,6 +94,7 @@ function KanbanColumn({ step, tasks, collapsed, onToggle, onTaskClick }: KanbanC
                     key={task.taskID}
                     task={task}
                     compact
+                    showClient={showClient}
                     onClick={() => onTaskClick?.(task)}
                   />
                 ))}
@@ -133,9 +135,10 @@ interface ExtranetKanbanProps {
   byStep: Record<ExtranetStep, TaskrowTask[]>;
   isLoading?: boolean;
   onTaskClick?: (task: TaskrowTask) => void;
+  showClient?: boolean;
 }
 
-export function ExtranetKanban({ byStep, isLoading, onTaskClick }: ExtranetKanbanProps) {
+export function ExtranetKanban({ byStep, isLoading, onTaskClick, showClient }: ExtranetKanbanProps) {
   const [collapsed, setCollapsed] = useState<Set<ExtranetStep>>(new Set(["Finalizada"]));
 
   function toggleCollapse(step: ExtranetStep) {
@@ -184,6 +187,7 @@ export function ExtranetKanban({ byStep, isLoading, onTaskClick }: ExtranetKanba
             collapsed={collapsed.has(step)}
             onToggle={() => toggleCollapse(step)}
             onTaskClick={onTaskClick}
+            showClient={showClient}
           />
         ))}
       </div>

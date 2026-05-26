@@ -13,10 +13,11 @@ interface ExtranetTaskCardProps {
   task: TaskrowTask;
   compact?: boolean;
   showStep?: boolean;
+  showClient?: boolean;
   onClick?: () => void;
 }
 
-export function ExtranetTaskCard({ task, compact = false, showStep = false, onClick }: ExtranetTaskCardProps) {
+export function ExtranetTaskCard({ task, compact = false, showStep = false, showClient = false, onClick }: ExtranetTaskCardProps) {
   const step = (task.extranetPipelineStep || "Backlog") as ExtranetStep;
   const config = EXTRANET_COLUMN_CONFIG[step];
 
@@ -70,6 +71,12 @@ export function ExtranetTaskCard({ task, compact = false, showStep = false, onCl
         <p className="mt-0.5 text-[0.65rem] text-muted-foreground truncate">
           #{task.taskNumber} · {task.jobDisplayTitle || task.jobTitle}
         </p>
+
+        {showClient && (
+          <p className="mt-0.5 text-[0.65rem] font-medium text-primary/70 truncate">
+            {task.clientNickName || task.clientDisplayName}
+          </p>
+        )}
 
         {!compact && (
           <div className="mt-2 flex flex-wrap items-center gap-2">
