@@ -4,7 +4,7 @@ const http = require("http");
 const https = require("https");
 const fs = require("fs");
 const path = require("path");
-const { randomUUID } = require("crypto");
+const { randomUUID, randomBytes, createHash, timingSafeEqual } = require("crypto");
 const { spawn } = require("child_process");
 
 const PORT = Number(process.env.PORT) || 3000;
@@ -36,6 +36,8 @@ const TOKENS_FILE = path.join(DATA_DIR, "nps_tokens.json");
 const RESPONSES_FILE = path.join(DATA_DIR, "nps_responses.json");
 const CYCLES_FILE = path.join(DATA_DIR, "nps_cycles.json");
 const CONFIG_FILE = path.join(DATA_DIR, "config.json");
+const ALERTS_FILE = path.join(DATA_DIR, "alerts.json");
+const USERS_FILE = path.join(DATA_DIR, "users.json");
 
 // ── Data helpers ──────────────────────────────────────────────────────────────
 
@@ -603,6 +605,373 @@ async function handleNpsApi(req, res, urlPath, method) {
   return sendJson(res, 404, { error: "Endpoint não encontrado" });
 }
 
+// ── Alertas de WhatsApp (tarefas atrasadas por área) ───────────────────────────
+
+const DEFAULT_ALERTS = {
+  auth: null, // { username, salt, passwordHash } — gerado no primeiro boot
+  whatsapp: { phoneNumberId: "", accessToken: "", templateName: "", templateLang: "pt_BR" },
+  schedule: { enabled: true, hour: 8, minute: 0, weekdaysOnly: true },
+  responsaveis: [], // [{ area, name, phone }]
+  lastRun: null,    // { at, dryRun, results: [{ area, count, status, detail }] }
+  lastRunDate: null, // "YYYY-MM-DD" — evita disparo automático duplicado no dia
+};
+
+function readAlerts() {
+  try {
+    return { ...DEFAULT_ALERTS, ...JSON.parse(fs.readFileSync(ALERTS_FILE, "utf-8")) };
+  } catch {
+    return { ...DEFAULT_ALERTS };
+  }
+}
+function saveAlerts(d) { fs.writeFileSync(ALERTS_FILE, JSON.stringify(d, null, 2), "utf-8"); }
+
+// ── Auth simples (sem dependências) ─────────────────────────────────────────────
+
+const hashPassword = (password, salt) =>
+  createHash("sha256").update(salt + password).digest("hex");
+
+/** Gera login/senha no primeiro boot e devolve a senha em texto (uma única vez). */
+function ensureAlertsAuth() {
+  const alerts = readAlerts();
+  if (alerts.auth && alerts.auth.passwordHash) return null;
+  const username = "admin";
+  const password = randomBytes(9).toString("base64").replace(/[+/=]/g, "").slice(0, 12);
+  const salt = randomBytes(16).toString("hex");
+  alerts.auth = { username, salt, passwordHash: hashPassword(password, salt) };
+  saveAlerts(alerts);
+  console.log("\n========================================================");
+  console.log("  ALERTAS WHATSAPP — credenciais de acesso geradas:");
+  console.log(`  Login: ${username}`);
+  console.log(`  Senha: ${password}`);
+  console.log("  (guarde — só é exibida uma vez)");
+  console.log("========================================================\n");
+  return { username, password };
+}
+
+const sessions = new Map(); // token -> expiresAt (ms)
+const SESSION_TTL = 12 * 60 * 60 * 1000; // 12h
+
+function createSession() {
+  const token = randomBytes(24).toString("hex");
+  sessions.set(token, Date.now() + SESSION_TTL);
+  return token;
+}
+function validSession(token) {
+  const exp = sessions.get(token);
+  if (!exp) return false;
+  if (Date.now() > exp) { sessions.delete(token); return false; }
+  return true;
+}
+function bearerToken(req) {
+  const h = req.headers["authorization"] || "";
+  return h.startsWith("Bearer ") ? h.slice(7) : "";
+}
+function checkLogin(username, password) {
+  const auth = readAlerts().auth;
+  if (!auth) return false;
+  if (username !== auth.username) return false;
+  const got = Buffer.from(hashPassword(password, auth.salt));
+  const want = Buffer.from(auth.passwordHash);
+  return got.length === want.length && timingSafeEqual(got, want);
+}
+
+// ── Busca de usuários do Taskrow (mapa ownerUserID → área) ──────────────────────
+
+function fetchUsersFromTaskrow(apiKey) {
+  return new Promise((resolve, reject) => {
+    const req = https.request(
+      {
+        hostname: "crtcomunicacao.taskrow.com",
+        port: 443,
+        path: "/api/v1/User/ListUsers",
+        method: "GET",
+        headers: { "__identifier": apiKey, "Content-Type": "application/json" },
+      },
+      (proxyRes) => {
+        const chunks = [];
+        proxyRes.on("data", (d) => chunks.push(d));
+        proxyRes.on("end", () => {
+          try {
+            if (proxyRes.statusCode === 401 || proxyRes.statusCode === 403) {
+              return reject(new Error("API key inválida ou sem permissão no Taskrow."));
+            }
+            const users = JSON.parse(Buffer.concat(chunks).toString("utf-8"));
+            if (Array.isArray(users)) fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2), "utf-8");
+            resolve(Array.isArray(users) ? users : []);
+          } catch (e) {
+            reject(new Error(`Erro ao processar usuários da Taskrow: ${e.message}`));
+          }
+        });
+      }
+    );
+    req.on("error", reject);
+    req.end();
+  });
+}
+
+// ── Classificação de atraso (espelha src/lib/classifyTask.ts) ───────────────────
+
+const CLIENT_APPROVAL_STEPS = ["aprovação do cliente", "aprovação externa"];
+
+/** true se a tarefa está atrasada por culpa da CRT (não esperando o cliente). */
+function isOverdueCRT(task) {
+  if (task.closed) return false;
+  const due = task.dueDate ? new Date(task.dueDate) : null;
+  if (!due) return false; // sem prazo = backlog, não conta como atraso
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  if (due >= today) return false;
+  const pipeline = (task.pipelineStep || "").toLowerCase();
+  const tags = (task.tags || "").toLowerCase();
+  // urgente/retrabalho/backlog têm precedência sobre atraso no app — espelhamos
+  if (tags.includes("urgente") || pipeline.includes("urgente")) return false;
+  if (tags.includes("retrabalho") || pipeline.includes("retrabalho")) return false;
+  if (pipeline.includes("backlog") || pipeline.includes("aguardando")) return false;
+  // atraso_cliente fica de fora — não é responsabilidade da área
+  if (CLIENT_APPROVAL_STEPS.some((s) => pipeline.includes(s))) return false;
+  return true;
+}
+
+/** Agrupa as tarefas atrasadas (CRT) por área usando o mapa ownerUserID→área. */
+function buildOverdueByArea(tasks, users) {
+  const userArea = new Map();
+  users.forEach((u) => userArea.set(u.UserID, u.FunctionGroupName || "Sem Área"));
+  const byArea = new Map(); // area -> tasks[]
+  for (const t of tasks) {
+    if (!isOverdueCRT(t)) continue;
+    const area = userArea.get(t.ownerUserID) || "Sem Área";
+    if (!byArea.has(area)) byArea.set(area, []);
+    byArea.get(area).push(t);
+  }
+  return byArea;
+}
+
+// ── Envio via WhatsApp Cloud API (Meta) ─────────────────────────────────────────
+
+function sendWhatsAppTemplate(wa, phone, params) {
+  return new Promise((resolve, reject) => {
+    const payload = JSON.stringify({
+      messaging_product: "whatsapp",
+      to: phone,
+      type: "template",
+      template: {
+        name: wa.templateName,
+        language: { code: wa.templateLang || "pt_BR" },
+        components: [
+          {
+            type: "body",
+            parameters: params.map((text) => ({ type: "text", text: String(text) })),
+          },
+        ],
+      },
+    });
+    const req = https.request(
+      {
+        hostname: "graph.facebook.com",
+        port: 443,
+        path: `/v20.0/${wa.phoneNumberId}/messages`,
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${wa.accessToken}`,
+          "Content-Type": "application/json",
+          "Content-Length": Buffer.byteLength(payload),
+        },
+      },
+      (res) => {
+        const chunks = [];
+        res.on("data", (d) => chunks.push(d));
+        res.on("end", () => {
+          const text = Buffer.concat(chunks).toString("utf-8");
+          if (res.statusCode >= 200 && res.statusCode < 300) return resolve(text);
+          let msg = text.slice(0, 300);
+          try { msg = JSON.parse(text).error?.message || msg; } catch {}
+          reject(new Error(`Meta API ${res.statusCode}: ${msg}`));
+        });
+      }
+    );
+    req.on("error", reject);
+    req.write(payload);
+    req.end();
+  });
+}
+
+/** Parâmetro de template não aceita quebra de linha/tab — sanitiza p/ uma linha. */
+function sanitizeParam(s) {
+  return String(s).replace(/[\n\r\t]+/g, " ").replace(/ {4,}/g, "   ").trim();
+}
+
+function buildTaskList(tasks, max = 8) {
+  const titles = tasks.slice(0, max).map((t) => t.taskTitle || `#${t.taskNumber}`);
+  let list = titles.join(" · ");
+  if (tasks.length > max) list += ` (+${tasks.length - max})`;
+  return sanitizeParam(list) || "—";
+}
+
+/**
+ * Núcleo do job: lê tarefas/usuários, agrupa atrasadas por área e envia (ou
+ * apenas pré-visualiza, em dryRun) o resumo para o responsável de cada área.
+ */
+async function runOverdueAlerts({ dryRun = false } = {}) {
+  const alerts = readAlerts();
+  const apiKey = readConfig().taskrowApiKey;
+  if (!apiKey) throw new Error("API key do Taskrow não configurada (aba Configurações).");
+
+  // 1. Atualiza tarefas (reutiliza fetch paginado) + usuários
+  await fetchTasksFromTaskrow(apiKey);
+  const tasks = readJSON(TASKS_FILE);
+  const users = await fetchUsersFromTaskrow(apiKey);
+
+  // 2. Agrupa atrasadas por área
+  const byArea = buildOverdueByArea(tasks, users);
+
+  // 3. Para cada responsável configurado, monta e envia o resumo
+  const results = [];
+  for (const r of alerts.responsaveis) {
+    const overdue = byArea.get(r.area) || [];
+    if (!r.phone || !r.name) {
+      results.push({ area: r.area, count: overdue.length, status: "skipped", detail: "sem responsável/telefone" });
+      continue;
+    }
+    if (overdue.length === 0) {
+      results.push({ area: r.area, count: 0, status: "skipped", detail: "nenhuma atrasada" });
+      continue;
+    }
+    const params = [sanitizeParam(r.area), String(overdue.length), buildTaskList(overdue)];
+    const preview = `Bom dia! ⚠️ A área ${params[0]} tem ${params[1]} tarefa(s) atrasada(s): ${params[2]}.`;
+    if (dryRun) {
+      results.push({ area: r.area, count: overdue.length, status: "preview", detail: preview, phone: r.phone });
+      continue;
+    }
+    const wa = alerts.whatsapp;
+    if (!wa.phoneNumberId || !wa.accessToken || !wa.templateName) {
+      results.push({ area: r.area, count: overdue.length, status: "error", detail: "credenciais do WhatsApp (Meta) incompletas" });
+      continue;
+    }
+    try {
+      await sendWhatsAppTemplate(wa, r.phone, params);
+      results.push({ area: r.area, count: overdue.length, status: "sent", detail: `enviado p/ ${r.name}` });
+    } catch (e) {
+      results.push({ area: r.area, count: overdue.length, status: "error", detail: e.message });
+    }
+  }
+
+  const fresh = readAlerts();
+  fresh.lastRun = { at: new Date().toISOString(), dryRun, results };
+  if (!dryRun) fresh.lastRunDate = new Date().toISOString().slice(0, 10);
+  saveAlerts(fresh);
+  return results;
+}
+
+// ── Alertas API ─────────────────────────────────────────────────────────────────
+
+function maskedWhatsapp(wa) {
+  return { ...wa, accessToken: wa.accessToken ? "••••••••" : "" };
+}
+
+async function handleAlertsApi(req, res, urlPath, method) {
+  // POST /api/alerts/login — público
+  if (urlPath === "/api/alerts/login" && method === "POST") {
+    const body = await parseBody(req);
+    if (!checkLogin(String(body.username || ""), String(body.password || ""))) {
+      return sendJson(res, 401, { error: "Usuário ou senha inválidos." });
+    }
+    return sendJson(res, 200, { token: createSession() });
+  }
+
+  // Demais endpoints exigem sessão válida
+  if (!validSession(bearerToken(req))) {
+    return sendJson(res, 401, { error: "Não autenticado." });
+  }
+
+  // GET /api/alerts/config
+  if (urlPath === "/api/alerts/config" && method === "GET") {
+    const a = readAlerts();
+    return sendJson(res, 200, {
+      responsaveis: a.responsaveis,
+      whatsapp: maskedWhatsapp(a.whatsapp),
+      schedule: a.schedule,
+      lastRun: a.lastRun,
+    });
+  }
+
+  // POST /api/alerts/config — salva responsáveis / whatsapp / schedule
+  if (urlPath === "/api/alerts/config" && method === "POST") {
+    const body = await parseBody(req);
+    const a = readAlerts();
+    if (Array.isArray(body.responsaveis)) {
+      a.responsaveis = body.responsaveis.map((r) => ({
+        area: String(r.area || ""),
+        name: String(r.name || ""),
+        phone: String(r.phone || "").replace(/\D/g, ""),
+      }));
+    }
+    if (body.whatsapp) {
+      const w = body.whatsapp;
+      a.whatsapp = {
+        phoneNumberId: String(w.phoneNumberId ?? a.whatsapp.phoneNumberId),
+        // não sobrescreve o token se vier mascarado
+        accessToken: w.accessToken && !w.accessToken.includes("••") ? String(w.accessToken) : a.whatsapp.accessToken,
+        templateName: String(w.templateName ?? a.whatsapp.templateName),
+        templateLang: String(w.templateLang ?? a.whatsapp.templateLang),
+      };
+    }
+    if (body.schedule) {
+      a.schedule = {
+        enabled: !!body.schedule.enabled,
+        hour: Math.max(0, Math.min(23, Number(body.schedule.hour) || 0)),
+        minute: Math.max(0, Math.min(59, Number(body.schedule.minute) || 0)),
+        weekdaysOnly: !!body.schedule.weekdaysOnly,
+      };
+    }
+    saveAlerts(a);
+    return sendJson(res, 200, { ok: true });
+  }
+
+  // GET /api/alerts/areas — áreas com contagem atual de atrasadas (CRT)
+  if (urlPath === "/api/alerts/areas" && method === "GET") {
+    const tasks = readJSON(TASKS_FILE);
+    let users = readJSON(USERS_FILE);
+    if (!Array.isArray(users) || !users.length) {
+      const apiKey = readConfig().taskrowApiKey;
+      if (apiKey) { try { users = await fetchUsersFromTaskrow(apiKey); } catch {} }
+    }
+    const byArea = buildOverdueByArea(Array.isArray(tasks) ? tasks : [], Array.isArray(users) ? users : []);
+    const areas = Array.from(byArea.entries())
+      .map(([area, list]) => ({ area, overdue: list.length }))
+      .sort((a, b) => b.overdue - a.overdue);
+    return sendJson(res, 200, { areas });
+  }
+
+  // POST /api/alerts/run?dryRun=1 — dispara agora (ou pré-visualiza)
+  if (urlPath === "/api/alerts/run" && method === "POST") {
+    const dryRun = /[?&]dryRun=1\b/.test(req.url || "");
+    try {
+      const results = await runOverdueAlerts({ dryRun });
+      return sendJson(res, 200, { ok: true, dryRun, results });
+    } catch (e) {
+      return sendJson(res, 500, { error: e.message });
+    }
+  }
+
+  return sendJson(res, 404, { error: "Endpoint não encontrado" });
+}
+
+// ── Agendador (sem dependências) ────────────────────────────────────────────────
+
+function alertsScheduleTick() {
+  const a = readAlerts();
+  if (!a.schedule?.enabled) return;
+  const now = new Date();
+  if (a.schedule.weekdaysOnly && (now.getDay() === 0 || now.getDay() === 6)) return;
+  if (now.getHours() !== a.schedule.hour || now.getMinutes() !== a.schedule.minute) return;
+  const todayStr = now.toISOString().slice(0, 10);
+  if (a.lastRunDate === todayStr) return; // já rodou hoje
+  console.log(`[alertas] Disparo automático agendado (${todayStr} ${a.schedule.hour}:${a.schedule.minute})...`);
+  runOverdueAlerts({ dryRun: false })
+    .then((r) => console.log(`[alertas] Concluído: ${r.length} áreas processadas.`))
+    .catch((e) => console.error("[alertas] Disparo automático falhou:", e.message));
+}
+
 // ── HTTP server ───────────────────────────────────────────────────────────────
 
 const server = http.createServer(async (req, res) => {
@@ -629,6 +998,12 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    // Alertas (WhatsApp) API
+    if (urlPath.startsWith("/api/alerts")) {
+      await handleAlertsApi(req, res, urlPath, method);
+      return;
+    }
+
     // Taskrow reverse-proxy
     if (urlPath.startsWith("/taskrow-api")) {
       proxyTaskrow(req, res, rawUrl);
@@ -648,4 +1023,8 @@ const server = http.createServer(async (req, res) => {
 server.setTimeout(10 * 60 * 1000); // 10 min — fetch paginado da Taskrow pode demorar
 server.listen(PORT, () => {
   console.log(`CRTTask running on http://localhost:${PORT}`);
+  // Garante credenciais de acesso à aba de Alertas (exibe senha 1x no boot)
+  ensureAlertsAuth();
+  // Agendador de alertas — checa a cada 60s se está na hora do disparo diário
+  setInterval(alertsScheduleTick, 60 * 1000);
 });

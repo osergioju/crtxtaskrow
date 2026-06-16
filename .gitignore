@@ -1,1 +1,5 @@
 .env
+
+# Runtime: segredos e caches da feature de Alertas (não versionar)
+data/alerts.json
+data/users.json

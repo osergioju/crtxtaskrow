@@ -1,5 +1,5 @@
 import { useLocation, useNavigate } from "react-router-dom";
-import { BarChart3, Users, Building2, Layers, Activity, ListTodo, FolderKanban, Star, BrainCircuit, Settings, Wifi, WifiOff, Globe, Gauge } from "lucide-react";
+import { BarChart3, Users, Building2, Layers, Activity, ListTodo, FolderKanban, Star, BrainCircuit, Settings, Wifi, WifiOff, Globe, Gauge, BellRing } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -19,6 +19,7 @@ const navItems = [
   { label: "Análise Preditiva", path: "/analytics", icon: BrainCircuit },
   { label: "Extranet", path: "/extranet", icon: Globe },
   { label: "Workload Intelligence", path: "/capacidade", icon: Gauge },
+  { label: "Alertas WhatsApp", path: "/alertas", icon: BellRing },
 ];
 
 export function Sidebar() {
