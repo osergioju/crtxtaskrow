@@ -20,6 +20,10 @@ interface CapacityStore {
   setSelectedPeriodKey: (key: string | null) => void;
   activeTab: string;
   setActiveTab: (tab: string) => void;
+
+  /** Selected area (FunctionGroupName) or null for "Todas" */
+  selectedArea: string | null;
+  setSelectedArea: (area: string | null) => void;
 }
 
 let simIdCounter = 0;
@@ -45,4 +49,7 @@ export const useCapacityStore = create<CapacityStore>((set) => ({
 
   activeTab: "heatmap",
   setActiveTab: (tab) => set({ activeTab: tab }),
+
+  selectedArea: null,
+  setSelectedArea: (area) => set({ selectedArea: area, selectedPeriodKey: null }),
 }));

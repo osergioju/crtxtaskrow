@@ -19,7 +19,7 @@ const navItems = [
   { label: "Análise Preditiva", path: "/analytics", icon: BrainCircuit },
   { label: "Extranet", path: "/extranet", icon: Globe },
   { label: "Workload Intelligence", path: "/capacidade", icon: Gauge },
-  { label: "Alertas WhatsApp", path: "/alertas", icon: BellRing },
+  { label: "Alertas Teams", path: "/alertas", icon: BellRing },
 ];
 
 export function Sidebar() {

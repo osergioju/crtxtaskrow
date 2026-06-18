@@ -609,9 +609,8 @@ async function handleNpsApi(req, res, urlPath, method) {
 
 const DEFAULT_ALERTS = {
   auth: null, // { username, salt, passwordHash } — gerado no primeiro boot
-  whatsapp: { phoneNumberId: "", accessToken: "", templateName: "", templateLang: "pt_BR" },
   schedule: { enabled: true, hour: 8, minute: 0, weekdaysOnly: true },
-  responsaveis: [], // [{ area, name, phone }]
+  responsaveis: [], // [{ area, name, email, webhookUrl }] — webhook do canal do Teams
   lastRun: null,    // { at, dryRun, results: [{ area, count, status, detail }] }
   lastRunDate: null, // "YYYY-MM-DD" — evita disparo automático duplicado no dia
 };
@@ -746,36 +745,21 @@ function buildOverdueByArea(tasks, users) {
   return byArea;
 }
 
-// ── Envio via WhatsApp Cloud API (Meta) ─────────────────────────────────────────
+// ── Envio via Microsoft Teams (webhook do Power Automate) ────────────────────────
 
-function sendWhatsAppTemplate(wa, phone, params) {
+/** POST genérico de JSON para uma URL arbitrária (webhook do Teams). */
+function postJson(urlStr, payloadObj) {
   return new Promise((resolve, reject) => {
-    const payload = JSON.stringify({
-      messaging_product: "whatsapp",
-      to: phone,
-      type: "template",
-      template: {
-        name: wa.templateName,
-        language: { code: wa.templateLang || "pt_BR" },
-        components: [
-          {
-            type: "body",
-            parameters: params.map((text) => ({ type: "text", text: String(text) })),
-          },
-        ],
-      },
-    });
+    let u;
+    try { u = new URL(urlStr); } catch { return reject(new Error("URL de webhook inválida.")); }
+    const payload = JSON.stringify(payloadObj);
     const req = https.request(
       {
-        hostname: "graph.facebook.com",
+        hostname: u.hostname,
         port: 443,
-        path: `/v20.0/${wa.phoneNumberId}/messages`,
+        path: u.pathname + u.search,
         method: "POST",
-        headers: {
-          "Authorization": `Bearer ${wa.accessToken}`,
-          "Content-Type": "application/json",
-          "Content-Length": Buffer.byteLength(payload),
-        },
+        headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(payload) },
       },
       (res) => {
         const chunks = [];
@@ -783,9 +767,7 @@ function sendWhatsAppTemplate(wa, phone, params) {
         res.on("end", () => {
           const text = Buffer.concat(chunks).toString("utf-8");
           if (res.statusCode >= 200 && res.statusCode < 300) return resolve(text);
-          let msg = text.slice(0, 300);
-          try { msg = JSON.parse(text).error?.message || msg; } catch {}
-          reject(new Error(`Meta API ${res.statusCode}: ${msg}`));
+          reject(new Error(`Teams webhook ${res.statusCode}: ${text.slice(0, 200)}`));
         });
       }
     );
@@ -795,16 +777,50 @@ function sendWhatsAppTemplate(wa, phone, params) {
   });
 }
 
-/** Parâmetro de template não aceita quebra de linha/tab — sanitiza p/ uma linha. */
-function sanitizeParam(s) {
-  return String(s).replace(/[\n\r\t]+/g, " ").replace(/ {4,}/g, "   ").trim();
+const fmtDate = (s) => {
+  if (!s) return "";
+  const d = new Date(s);
+  return isNaN(d) ? "" : `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}`;
+};
+
+function taskLine(t) {
+  const title = t.taskTitle || `#${t.taskNumber}`;
+  const due = fmtDate(t.dueDate);
+  return `• ${title}${due ? ` (venceu ${due})` : ""}${t.clientNickName ? ` — ${t.clientNickName}` : ""}`;
 }
 
-function buildTaskList(tasks, max = 8) {
-  const titles = tasks.slice(0, max).map((t) => t.taskTitle || `#${t.taskNumber}`);
-  let list = titles.join(" · ");
-  if (tasks.length > max) list += ` (+${tasks.length - max})`;
-  return sanitizeParam(list) || "—";
+/** Texto plano do resumo (usado na pré-visualização). */
+function buildPreviewText(r, tasks, max = 15) {
+  const greet = r.name ? `${r.name}` : "equipe";
+  const lines = tasks.slice(0, max).map(taskLine);
+  if (tasks.length > max) lines.push(`…e mais ${tasks.length - max}`);
+  return `⚠️ ${greet}, a área ${r.area} tem ${tasks.length} tarefa(s) atrasada(s):\n${lines.join("\n")}\n\nAcesse o painel CRT para resolver.`;
+}
+
+/** Monta o payload do Teams (Adaptive Card) com @menção opcional ao responsável. */
+function buildTeamsPayload(r, tasks, max = 15) {
+  const useMention = !!(r.email && r.name);
+  const mentionTag = useMention ? `<at>${r.name}</at>` : (r.name || "equipe");
+  const body = [
+    { type: "TextBlock", size: "Large", weight: "Bolder", wrap: true,
+      text: `⚠️ ${tasks.length} tarefa(s) atrasada(s) — ${r.area}` },
+    { type: "TextBlock", wrap: true,
+      text: `Bom dia, ${mentionTag}! Estas tarefas da área **${r.area}** estão atrasadas:` },
+    ...tasks.slice(0, max).map((t) => ({ type: "TextBlock", wrap: true, spacing: "Small", text: taskLine(t) })),
+  ];
+  if (tasks.length > max) body.push({ type: "TextBlock", isSubtle: true, wrap: true, text: `…e mais ${tasks.length - max}` });
+  body.push({ type: "TextBlock", isSubtle: true, wrap: true, spacing: "Medium", text: "Acesse o painel CRT para resolver." });
+
+  const card = {
+    type: "AdaptiveCard",
+    $schema: "http://adaptivecards.io/schemas/adaptive-card.json",
+    version: "1.4",
+    body,
+  };
+  if (useMention) {
+    card.msteams = { entities: [{ type: "mention", text: `<at>${r.name}</at>`, mentioned: { id: r.email, name: r.name } }] };
+  }
+  return { type: "message", attachments: [{ contentType: "application/vnd.microsoft.card.adaptive", content: card }] };
 }
 
 /**
@@ -824,32 +840,25 @@ async function runOverdueAlerts({ dryRun = false } = {}) {
   // 2. Agrupa atrasadas por área
   const byArea = buildOverdueByArea(tasks, users);
 
-  // 3. Para cada responsável configurado, monta e envia o resumo
+  // 3. Para cada área com responsável configurado, monta e posta no canal do Teams
   const results = [];
   for (const r of alerts.responsaveis) {
     const overdue = byArea.get(r.area) || [];
-    if (!r.phone || !r.name) {
-      results.push({ area: r.area, count: overdue.length, status: "skipped", detail: "sem responsável/telefone" });
-      continue;
-    }
     if (overdue.length === 0) {
       results.push({ area: r.area, count: 0, status: "skipped", detail: "nenhuma atrasada" });
       continue;
     }
-    const params = [sanitizeParam(r.area), String(overdue.length), buildTaskList(overdue)];
-    const preview = `Bom dia! ⚠️ A área ${params[0]} tem ${params[1]} tarefa(s) atrasada(s): ${params[2]}.`;
     if (dryRun) {
-      results.push({ area: r.area, count: overdue.length, status: "preview", detail: preview, phone: r.phone });
+      results.push({ area: r.area, count: overdue.length, status: "preview", detail: buildPreviewText(r, overdue) });
       continue;
     }
-    const wa = alerts.whatsapp;
-    if (!wa.phoneNumberId || !wa.accessToken || !wa.templateName) {
-      results.push({ area: r.area, count: overdue.length, status: "error", detail: "credenciais do WhatsApp (Meta) incompletas" });
+    if (!r.webhookUrl) {
+      results.push({ area: r.area, count: overdue.length, status: "error", detail: "sem webhook do Teams configurado" });
       continue;
     }
     try {
-      await sendWhatsAppTemplate(wa, r.phone, params);
-      results.push({ area: r.area, count: overdue.length, status: "sent", detail: `enviado p/ ${r.name}` });
+      await postJson(r.webhookUrl, buildTeamsPayload(r, overdue));
+      results.push({ area: r.area, count: overdue.length, status: "sent", detail: `postado no Teams${r.name ? ` (@${r.name})` : ""}` });
     } catch (e) {
       results.push({ area: r.area, count: overdue.length, status: "error", detail: e.message });
     }
@@ -863,10 +872,6 @@ async function runOverdueAlerts({ dryRun = false } = {}) {
 }
 
 // ── Alertas API ─────────────────────────────────────────────────────────────────
-
-function maskedWhatsapp(wa) {
-  return { ...wa, accessToken: wa.accessToken ? "••••••••" : "" };
-}
 
 async function handleAlertsApi(req, res, urlPath, method) {
   // POST /api/alerts/login — público
@@ -883,37 +888,34 @@ async function handleAlertsApi(req, res, urlPath, method) {
     return sendJson(res, 401, { error: "Não autenticado." });
   }
 
-  // GET /api/alerts/config
+  // GET /api/alerts/config — webhook mascarado (é um segredo: quem tem a URL posta)
   if (urlPath === "/api/alerts/config" && method === "GET") {
     const a = readAlerts();
     return sendJson(res, 200, {
-      responsaveis: a.responsaveis,
-      whatsapp: maskedWhatsapp(a.whatsapp),
+      responsaveis: a.responsaveis.map((r) => ({
+        area: r.area,
+        name: r.name || "",
+        email: r.email || "",
+        webhookUrl: r.webhookUrl ? "••••••••" : "",
+      })),
       schedule: a.schedule,
       lastRun: a.lastRun,
     });
   }
 
-  // POST /api/alerts/config — salva responsáveis / whatsapp / schedule
+  // POST /api/alerts/config — salva responsáveis / schedule
   if (urlPath === "/api/alerts/config" && method === "POST") {
     const body = await parseBody(req);
     const a = readAlerts();
     if (Array.isArray(body.responsaveis)) {
-      a.responsaveis = body.responsaveis.map((r) => ({
-        area: String(r.area || ""),
-        name: String(r.name || ""),
-        phone: String(r.phone || "").replace(/\D/g, ""),
-      }));
-    }
-    if (body.whatsapp) {
-      const w = body.whatsapp;
-      a.whatsapp = {
-        phoneNumberId: String(w.phoneNumberId ?? a.whatsapp.phoneNumberId),
-        // não sobrescreve o token se vier mascarado
-        accessToken: w.accessToken && !w.accessToken.includes("••") ? String(w.accessToken) : a.whatsapp.accessToken,
-        templateName: String(w.templateName ?? a.whatsapp.templateName),
-        templateLang: String(w.templateLang ?? a.whatsapp.templateLang),
-      };
+      const prevByArea = new Map(a.responsaveis.map((r) => [r.area, r]));
+      a.responsaveis = body.responsaveis.map((r) => {
+        const area = String(r.area || "");
+        let webhookUrl = String(r.webhookUrl || "");
+        // se vier mascarado (não foi alterado), mantém o webhook já salvo da área
+        if (webhookUrl.includes("•")) webhookUrl = prevByArea.get(area)?.webhookUrl || "";
+        return { area, name: String(r.name || ""), email: String(r.email || "").trim(), webhookUrl };
+      });
     }
     if (body.schedule) {
       a.schedule = {

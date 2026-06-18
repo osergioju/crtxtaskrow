@@ -116,12 +116,15 @@ function SummaryKPIs({ avgScore, peakScore, peakPeriodLabel, criticalFutureCount
 
 export default function CapacityView() {
   const {
-    scores, periods, globalAlerts, userBreakdown,
+    areas, scores, periods, globalAlerts, userBreakdown,
     clientBreakdown, forecast, simResults,
     summaryStats, isLoading, error, refetch,
   } = useCapacityData();
 
-  const { selectedPeriodKey, setSelectedPeriodKey, activeTab, setActiveTab, simulationActive } = useCapacityStore();
+  const {
+    selectedPeriodKey, setSelectedPeriodKey, activeTab, setActiveTab,
+    simulationActive, selectedArea, setSelectedArea,
+  } = useCapacityStore();
 
   const selectedScore = useMemo(
     () => scores.find(s => s.period.key === selectedPeriodKey) || null,
@@ -146,9 +149,11 @@ export default function CapacityView() {
   return (
     <div>
       <PageHeader
-        breadcrumb={["CRT", "CAPACIDADE"]}
+        breadcrumb={["CRT", "CAPACIDADE", ...(selectedArea ? [selectedArea.toUpperCase()] : [])]}
         title="Workload Intelligence"
-        subtitle="Radar operacional · Previsão de colapso · Simulação de impacto"
+        subtitle={selectedArea
+          ? `Área: ${selectedArea} · capacidade calculada sobre o time real da área`
+          : "Radar operacional · Previsão de colapso · Simulação de impacto"}
       >
         <div className="flex items-center gap-2">
           {!isLoading && criticalCount > 0 && (
@@ -178,6 +183,37 @@ export default function CapacityView() {
           </Button>
         </div>
       </PageHeader>
+
+      {/* Area tabs — scope the whole view to one área (capacidade real por time) */}
+      {areas.length > 1 && (
+        <div className="mb-4 flex items-center gap-1 overflow-x-auto pb-1">
+          <button
+            onClick={() => setSelectedArea(null)}
+            className={cn(
+              "shrink-0 rounded-full border px-3 py-1.5 text-xs font-semibold transition-colors",
+              selectedArea === null
+                ? "border-primary bg-primary text-primary-foreground"
+                : "border-border bg-card text-muted-foreground hover:bg-muted"
+            )}
+          >
+            Todas as áreas
+          </button>
+          {areas.map((area) => (
+            <button
+              key={area}
+              onClick={() => setSelectedArea(area)}
+              className={cn(
+                "shrink-0 rounded-full border px-3 py-1.5 text-xs font-semibold transition-colors",
+                selectedArea === area
+                  ? "border-primary bg-primary text-primary-foreground"
+                  : "border-border bg-card text-muted-foreground hover:bg-muted"
+              )}
+            >
+              {area}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* KPI Row */}
       {summaryStats && (

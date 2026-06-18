@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { BellRing, Lock, MessageCircle, Clock, Send, Eye, Save, LogOut, Loader2 } from "lucide-react";
+import { BellRing, Lock, Clock, Send, Eye, Save, LogOut, Loader2, MessagesSquare } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -13,14 +13,12 @@ import { toast } from "@/hooks/use-toast";
 
 const TOKEN_KEY = "alerts_token";
 
-interface Responsavel { area: string; name: string; phone: string; }
-interface WhatsAppCfg { phoneNumberId: string; accessToken: string; templateName: string; templateLang: string; }
+interface Responsavel { area: string; name: string; email: string; webhookUrl: string; }
 interface ScheduleCfg { enabled: boolean; hour: number; minute: number; weekdaysOnly: boolean; }
-interface RunResult { area: string; count: number; status: string; detail: string; phone?: string; }
+interface RunResult { area: string; count: number; status: string; detail: string; }
 interface LastRun { at: string; dryRun: boolean; results: RunResult[]; }
 
-const TEMPLATE_SUGESTAO =
-  "Bom dia! ⚠️ A área {{1}} tem {{2}} tarefa(s) atrasada(s): {{3}}. Acesse o painel CRT para resolver.";
+type RowField = "name" | "email" | "webhookUrl";
 
 export default function AlertsView() {
   const [token, setToken] = useState<string>(() => localStorage.getItem(TOKEN_KEY) || "");
@@ -64,7 +62,7 @@ function LoginForm({ onLogin }: { onLogin: (token: string) => void }) {
           <div className="mx-auto mb-2 flex h-12 w-12 items-center justify-center rounded-full bg-primary/10">
             <Lock className="h-5 w-5 text-primary" />
           </div>
-          <CardTitle>Alertas WhatsApp</CardTitle>
+          <CardTitle>Alertas no Teams</CardTitle>
           <CardDescription>Acesso restrito. Entre com login e senha.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
@@ -95,7 +93,6 @@ function AlertsDashboard({ token, onLogout }: { token: string; onLogout: () => v
   const [running, setRunning] = useState<"" | "preview" | "send">("");
   const [responsaveis, setResponsaveis] = useState<Responsavel[]>([]);
   const [areas, setAreas] = useState<{ area: string; overdue: number }[]>([]);
-  const [whatsapp, setWhatsapp] = useState<WhatsAppCfg>({ phoneNumberId: "", accessToken: "", templateName: "", templateLang: "pt_BR" });
   const [schedule, setSchedule] = useState<ScheduleCfg>({ enabled: true, hour: 8, minute: 0, weekdaysOnly: true });
   const [lastRun, setLastRun] = useState<LastRun | null>(null);
 
@@ -115,8 +112,7 @@ function AlertsDashboard({ token, onLogout }: { token: string; onLogout: () => v
     try {
       const [cfg, ar] = await Promise.all([api("/api/alerts/config"), api("/api/alerts/areas")]);
       setResponsaveis(cfg.responsaveis || []);
-      setWhatsapp(cfg.whatsapp || whatsapp);
-      setSchedule(cfg.schedule || schedule);
+      setSchedule(cfg.schedule || { enabled: true, hour: 8, minute: 0, weekdaysOnly: true });
       setLastRun(cfg.lastRun || null);
       setAreas(ar.areas || []);
     } catch (e: any) {
@@ -124,7 +120,6 @@ function AlertsDashboard({ token, onLogout }: { token: string; onLogout: () => v
     } finally {
       setLoading(false);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [api]);
 
   useEffect(() => { load(); }, [load]);
@@ -132,31 +127,31 @@ function AlertsDashboard({ token, onLogout }: { token: string; onLogout: () => v
   // Linhas editáveis = união de áreas detectadas + responsáveis já cadastrados
   const rows = useMemo(() => {
     const map = new Map<string, Responsavel & { overdue: number }>();
-    areas.forEach((a) => map.set(a.area, { area: a.area, name: "", phone: "", overdue: a.overdue }));
+    areas.forEach((a) => map.set(a.area, { area: a.area, name: "", email: "", webhookUrl: "", overdue: a.overdue }));
     responsaveis.forEach((r) => {
       const prev = map.get(r.area);
-      map.set(r.area, { area: r.area, name: r.name, phone: r.phone, overdue: prev?.overdue ?? 0 });
+      map.set(r.area, { ...r, overdue: prev?.overdue ?? 0 });
     });
     return Array.from(map.values()).sort((a, b) => b.overdue - a.overdue || a.area.localeCompare(b.area));
   }, [areas, responsaveis]);
 
-  const setRow = (area: string, field: "name" | "phone", value: string) => {
+  const setRow = (area: string, field: RowField, value: string) => {
     setResponsaveis((prev) => {
       const idx = prev.findIndex((r) => r.area === area);
-      if (idx === -1) return [...prev, { area, name: "", phone: "", [field]: value } as Responsavel];
+      if (idx === -1) return [...prev, { area, name: "", email: "", webhookUrl: "", [field]: value } as Responsavel];
       const copy = [...prev];
       copy[idx] = { ...copy[idx], [field]: value };
       return copy;
     });
   };
-  const rowValue = (area: string, field: "name" | "phone") =>
+  const rowValue = (area: string, field: RowField) =>
     responsaveis.find((r) => r.area === area)?.[field] ?? "";
 
   const saveConfig = async () => {
     setSaving(true);
     try {
-      const cleaned = responsaveis.filter((r) => r.name.trim() || r.phone.trim());
-      await api("/api/alerts/config", { method: "POST", body: JSON.stringify({ responsaveis: cleaned, whatsapp, schedule }) });
+      const cleaned = responsaveis.filter((r) => r.name.trim() || r.email.trim() || r.webhookUrl.trim());
+      await api("/api/alerts/config", { method: "POST", body: JSON.stringify({ responsaveis: cleaned, schedule }) });
       toast({ title: "Configurações salvas" });
       load();
     } catch (e: any) {
@@ -181,7 +176,7 @@ function AlertsDashboard({ token, onLogout }: { token: string; onLogout: () => v
 
   return (
     <div>
-      <PageHeader breadcrumb={["CRT", "ALERTAS"]} title="Alertas WhatsApp" subtitle="Avisos diários de tarefas atrasadas por área">
+      <PageHeader breadcrumb={["CRT", "ALERTAS"]} title="Alertas no Teams" subtitle="Avisos diários de tarefas atrasadas por área">
         <Button variant="ghost" size="sm" className="gap-2 text-muted-foreground" onClick={onLogout}>
           <LogOut className="h-4 w-4" /> Sair
         </Button>
@@ -191,11 +186,25 @@ function AlertsDashboard({ token, onLogout }: { token: string; onLogout: () => v
         <div className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" /> Carregando…</div>
       ) : (
         <div className="space-y-6">
+          {/* Como conectar o Teams */}
+          <Card className="border-primary/30 bg-primary/5">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-base"><MessagesSquare className="h-4 w-4 text-primary" /> Como conectar cada canal do Teams</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-1 text-sm text-muted-foreground">
+              <p>1. No Teams, no canal da área, clique em <b>•••</b> → <b>Fluxos de Trabalho</b> (Workflows).</p>
+              <p>2. Escolha o modelo <b>"Postar em um canal quando uma solicitação de webhook for recebida"</b>.</p>
+              <p>3. Conclua e copie a <b>URL gerada</b> — cole na coluna <b>Webhook do canal</b> abaixo.</p>
+              <p>4. No campo <b>E-mail</b>, use o e-mail corporativo (Microsoft 365) do responsável para que ele seja <b>@mencionado</b>.</p>
+              <p className="pt-1 text-xs">É gratuito (incluso no Microsoft 365) — não usa a API paga do WhatsApp.</p>
+            </CardContent>
+          </Card>
+
           {/* Responsáveis por área */}
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2 text-base"><BellRing className="h-4 w-4 text-primary" /> Responsáveis por área</CardTitle>
-              <CardDescription>Quem recebe o resumo diário de cada área. Telefone no formato internacional (ex.: 5511999999999).</CardDescription>
+              <CardDescription>Cada área posta no seu próprio canal e marca o responsável.</CardDescription>
             </CardHeader>
             <CardContent>
               <Table>
@@ -204,12 +213,13 @@ function AlertsDashboard({ token, onLogout }: { token: string; onLogout: () => v
                     <TableHead>ÁREA</TableHead>
                     <TableHead className="text-center">ATRASADAS HOJE</TableHead>
                     <TableHead>RESPONSÁVEL</TableHead>
-                    <TableHead>WHATSAPP</TableHead>
+                    <TableHead>E-MAIL (MENÇÃO)</TableHead>
+                    <TableHead>WEBHOOK DO CANAL</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {rows.length === 0 && (
-                    <TableRow><TableCell colSpan={4} className="text-center text-muted-foreground">Nenhuma área detectada ainda. Garanta que o Taskrow está conectado em Configurações.</TableCell></TableRow>
+                    <TableRow><TableCell colSpan={5} className="text-center text-muted-foreground">Nenhuma área detectada ainda. Garanta que o Taskrow está conectado em Configurações.</TableCell></TableRow>
                   )}
                   {rows.map((r) => (
                     <TableRow key={r.area}>
@@ -220,47 +230,18 @@ function AlertsDashboard({ token, onLogout }: { token: string; onLogout: () => v
                           : <span className="text-muted-foreground">0</span>}
                       </TableCell>
                       <TableCell>
-                        <Input value={rowValue(r.area, "name")} onChange={(e) => setRow(r.area, "name", e.target.value)} placeholder="Nome" className="h-8" />
+                        <Input value={rowValue(r.area, "name")} onChange={(e) => setRow(r.area, "name", e.target.value)} placeholder="Nome" className="h-8 min-w-28" />
                       </TableCell>
                       <TableCell>
-                        <Input value={rowValue(r.area, "phone")} onChange={(e) => setRow(r.area, "phone", e.target.value)} placeholder="55DDDNXXXXXXXX" className="h-8" />
+                        <Input value={rowValue(r.area, "email")} onChange={(e) => setRow(r.area, "email", e.target.value)} placeholder="nome@crtcomunicacao.com.br" className="h-8 min-w-44" />
+                      </TableCell>
+                      <TableCell>
+                        <Input value={rowValue(r.area, "webhookUrl")} onChange={(e) => setRow(r.area, "webhookUrl", e.target.value)} placeholder="https://… (Power Automate)" className="h-8 min-w-44" />
                       </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
               </Table>
-            </CardContent>
-          </Card>
-
-          {/* WhatsApp (Meta) */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-base"><MessageCircle className="h-4 w-4 text-primary" /> WhatsApp Cloud API (Meta)</CardTitle>
-              <CardDescription>Credenciais do número Business e do template aprovado para envio proativo.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div className="space-y-1.5">
-                  <Label>Phone Number ID</Label>
-                  <Input value={whatsapp.phoneNumberId} onChange={(e) => setWhatsapp({ ...whatsapp, phoneNumberId: e.target.value })} placeholder="ex.: 123456789012345" />
-                </div>
-                <div className="space-y-1.5">
-                  <Label>Access Token</Label>
-                  <Input type="password" value={whatsapp.accessToken} onChange={(e) => setWhatsapp({ ...whatsapp, accessToken: e.target.value })} placeholder="Token do app Meta" />
-                </div>
-                <div className="space-y-1.5">
-                  <Label>Nome do template</Label>
-                  <Input value={whatsapp.templateName} onChange={(e) => setWhatsapp({ ...whatsapp, templateName: e.target.value })} placeholder="ex.: alerta_atrasadas" />
-                </div>
-                <div className="space-y-1.5">
-                  <Label>Idioma do template</Label>
-                  <Input value={whatsapp.templateLang} onChange={(e) => setWhatsapp({ ...whatsapp, templateLang: e.target.value })} placeholder="pt_BR" />
-                </div>
-              </div>
-              <div className="rounded-md bg-muted/50 p-3 text-xs text-muted-foreground">
-                <p className="font-medium text-foreground">Template a cadastrar no Meta (3 variáveis no corpo):</p>
-                <p className="mt-1 font-mono">{TEMPLATE_SUGESTAO}</p>
-              </div>
             </CardContent>
           </Card>
 
@@ -302,7 +283,7 @@ function AlertsDashboard({ token, onLogout }: { token: string; onLogout: () => v
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2 text-base"><Send className="h-4 w-4 text-primary" /> Disparo manual</CardTitle>
-              <CardDescription>Pré-visualize as mensagens ou dispare o resumo agora. Salve as configurações antes.</CardDescription>
+              <CardDescription>Pré-visualize as mensagens ou poste o resumo agora. Salve as configurações antes.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="flex flex-wrap gap-2">
@@ -326,7 +307,7 @@ function AlertsDashboard({ token, onLogout }: { token: string; onLogout: () => v
                           <span className="font-medium">{r.area} <span className="text-muted-foreground">({r.count} atrasadas)</span></span>
                           <StatusBadge status={r.status} />
                         </div>
-                        <p className="mt-1 text-xs text-muted-foreground">{r.detail}</p>
+                        <p className="mt-1 whitespace-pre-line text-xs text-muted-foreground">{r.detail}</p>
                       </div>
                     ))}
                     {lastRun.results.length === 0 && <p className="text-sm text-muted-foreground">Nenhum responsável com tarefas atrasadas.</p>}

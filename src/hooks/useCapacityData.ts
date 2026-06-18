@@ -12,7 +12,8 @@ import {
   runSimulation,
 } from "@/lib/capacityEngine";
 import { useCapacityStore } from "@/store/capacityStore";
-import type { SimulationEntry } from "@/types/capacity";
+import { useUsers } from "@/hooks/useUsers";
+import type { TaskrowUser } from "@/types/taskrow";
 
 /** Fetch a wider date window — independent of the dashboard date picker */
 function useCapacityTasks() {
@@ -30,8 +31,33 @@ function useCapacityTasks() {
 }
 
 export function useCapacityData() {
-  const { capacityPerUser, simEntries } = useCapacityStore();
-  const { data: tasks, isLoading, error, refetch } = useCapacityTasks();
+  const { capacityPerUser, simEntries, selectedArea } = useCapacityStore();
+  const { data: allTasks, isLoading, error, refetch } = useCapacityTasks();
+  const { data: users } = useUsers();
+
+  // Map ownerUserID → área (FunctionGroupName lives on the user, not the task)
+  const userAreaMap = useMemo(() => {
+    const map = new Map<number, string>();
+    (users as TaskrowUser[] | undefined)?.forEach(u => {
+      map.set(u.UserID, u.FunctionGroupName || "Sem Área");
+    });
+    return map;
+  }, [users]);
+
+  // List of areas present in the data (for the top-level area tabs)
+  const areas = useMemo(() => {
+    if (!allTasks) return [];
+    const set = new Set<string>();
+    allTasks.forEach(t => set.add(userAreaMap.get(t.ownerUserID) || "Sem Área"));
+    return Array.from(set).sort((a, b) => a.localeCompare(b, "pt-BR"));
+  }, [allTasks, userAreaMap]);
+
+  // Scope tasks to the selected area; null = "Todas" (all areas)
+  const tasks = useMemo(() => {
+    if (!allTasks) return undefined;
+    if (!selectedArea) return allTasks;
+    return allTasks.filter(t => (userAreaMap.get(t.ownerUserID) || "Sem Área") === selectedArea);
+  }, [allTasks, selectedArea, userAreaMap]);
 
   // 4 months past + current + 7 months future = 12 periods
   const periods = useMemo(() => buildPeriods(4, 7), []);
@@ -95,6 +121,7 @@ export function useCapacityData() {
 
   return {
     tasks: tasks || [],
+    areas,
     periods,
     scores,
     globalAlerts,
