@@ -17,7 +17,7 @@ import { toast } from "@/hooks/use-toast";
 import { useUsers } from "@/hooks/useUsers";
 import { useClients } from "@/hooks/useClients";
 import { useProjects } from "@/hooks/useProjects";
-import { apiPost } from "@/lib/api";
+import { apiPost, fetchAllTasks } from "@/lib/api";
 import { taskrowLink } from "@/lib/taskrowLink";
 import type { TaskrowTask, TaskrowUser } from "@/types/taskrow";
 
@@ -255,26 +255,34 @@ export default function TaskImportView() {
   const [globalClientName, setGlobalClientName] = useState("");
   const [globalJob, setGlobalJob] = useState<JobRef | undefined>(undefined);
   const [inserting, setInserting] = useState(false);
+  const [existingClientID, setExistingClientID] = useState<number | undefined>(undefined);
+  const [resolvingExisting, setResolvingExisting] = useState(false);
+  const [hasSearchedExisting, setHasSearchedExisting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const { data: users, isLoading: loadingUsers } = useUsers();
   const { data: globalProjects, isLoading: loadingGlobalProjects } = useProjects(globalClientID);
 
-  /** Resolve cliente/projeto/tarefa de itens que apontam pra uma tarefa já existente,
-   *  buscando no cache local de tarefas (data/tasks.json) pelo número referenciado. */
-  const resolveExistingRefs = async (items: ExistingRefRow[]) => {
-    const codes = Array.from(new Set(items.map((r) => r.original.target_task_code).filter(Boolean))) as string[];
-    if (codes.length === 0) return;
+  /**
+   * Busca ao vivo na Taskrow (não no cache local) as tarefas do cliente
+   * escolhido e casa cada item pelo número referenciado — pedir o cliente
+   * antes de buscar evita varrer a conta inteira e usa dado sempre atual.
+   */
+  const searchExistingRefs = async () => {
+    if (!existingClientID) return;
+    setResolvingExisting(true);
     try {
-      const res = await fetch(`/api/tasks/by-number?numbers=${encodeURIComponent(codes.join(","))}`);
-      const data = await res.json();
-      const byNumber = new Map<string, TaskrowTask>((data.tasks || []).map((t: TaskrowTask) => [String(t.taskNumber), t]));
+      const tasks = await fetchAllTasks({ ClientID: existingClientID, Closed: null });
+      const byNumber = new Map(tasks.map((t) => [String(t.taskNumber), t]));
       setExistingRows((prev) => prev.map((r) => ({
         ...r,
         resolved: (r.original.target_task_code && byNumber.get(r.original.target_task_code)) || null,
       })));
-    } catch {
-      // silencioso — cada card mostra "não encontrado automaticamente" se resolved ficar null
+      setHasSearchedExisting(true);
+    } catch (e: any) {
+      toast({ title: "Erro ao buscar tarefas na Taskrow", description: e.message, variant: "destructive" });
+    } finally {
+      setResolvingExisting(false);
     }
   };
 
@@ -310,7 +318,8 @@ export default function TaskImportView() {
         resolved: null,
       }));
       setExistingRows(newExistingRows);
-      resolveExistingRefs(newExistingRows);
+      setExistingClientID(undefined);
+      setHasSearchedExisting(false);
 
       setSheetOpen(true);
     } catch (e: any) {
@@ -491,14 +500,23 @@ export default function TaskImportView() {
                   <div className="pt-2">
                     <h3 className="text-sm font-semibold">Relacionadas a tarefas existentes</h3>
                     <p className="text-xs text-muted-foreground">
-                      Atualização de tarefa ou nova subtarefa — cliente/projeto resolvidos automaticamente pelo número
-                      referenciado. Ainda não criam/atualizam nada por aqui: use o link pra abrir a tarefa no Taskrow
-                      e aplicar manualmente.
+                      Atualização de tarefa ou nova subtarefa — escolha o cliente pra buscar ao vivo na Taskrow (não
+                      usa cache) e casar cada item pelo número referenciado. Ainda não criam/atualizam nada por aqui:
+                      use o link pra abrir a tarefa no Taskrow e aplicar manualmente.
                     </p>
+                  </div>
+                  <div className="flex flex-wrap items-end gap-2 rounded-md border p-3">
+                    <div className="min-w-56 flex-1 space-y-1.5">
+                      <Label>Cliente das tarefas referenciadas</Label>
+                      <ClientCombobox value={existingClientID} onChange={(id) => setExistingClientID(id)} />
+                    </div>
+                    <Button onClick={searchExistingRefs} disabled={!existingClientID || resolvingExisting} className="gap-2">
+                      {resolvingExisting ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileJson className="h-4 w-4" />} Buscar
+                    </Button>
                   </div>
                   <div className="space-y-3">
                     {existingRows.map((row) => (
-                      <ExistingRefCard key={row.id} row={row} />
+                      <ExistingRefCard key={row.id} row={row} hasSearched={hasSearchedExisting} />
                     ))}
                   </div>
                 </>
@@ -652,7 +670,7 @@ function TaskCard({
   );
 }
 
-function ExistingRefCard({ row }: { row: ExistingRefRow }) {
+function ExistingRefCard({ row, hasSearched }: { row: ExistingRefRow; hasSearched: boolean }) {
   const t = row.original;
   const action = t.action ? ACTION_LABELS[t.action] : undefined;
 
@@ -685,7 +703,9 @@ function ExistingRefCard({ row }: { row: ExistingRefRow }) {
         ) : (
           <div className="flex items-center gap-1.5 rounded-md bg-muted/50 p-2.5 text-xs text-muted-foreground">
             <Link2Off className="h-3.5 w-3.5 shrink-0" />
-            Tarefa #{t.target_task_code} não encontrada no cache local (pode estar fora do período sincronizado) — busque manualmente no Taskrow.
+            {hasSearched
+              ? `Tarefa #${t.target_task_code} não encontrada nesse cliente — confira se é o cliente certo, ou busque manualmente no Taskrow.`
+              : "Escolha o cliente acima e clique em Buscar."}
           </div>
         )}
       </CardContent>
