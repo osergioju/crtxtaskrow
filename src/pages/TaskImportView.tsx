@@ -20,6 +20,9 @@ import { useProjects } from "@/hooks/useProjects";
 import { apiPost } from "@/lib/api";
 import type { TaskrowUser } from "@/types/taskrow";
 
+/** action: presente no formato v1.1 (schema "actions") — ausente no v1.0 (schema "tasks", sempre nova tarefa). */
+type ImportAction = "create_task" | "update_task" | "create_subtask" | "needs_classification" | null | undefined;
+
 interface ImportedTask {
   title: string;
   description?: string | null;
@@ -29,6 +32,22 @@ interface ImportedTask {
   status?: string | null;
   notes?: string | null;
   source?: { meeting?: string | null; timestamp?: string | null } | null;
+  action?: ImportAction;
+  target_task_code?: string | null;
+  classification?: string | null;
+}
+
+const ACTION_LABELS: Record<string, { label: string; cls: string }> = {
+  create_task: { label: "Nova tarefa", cls: "bg-emerald-100 text-emerald-700" },
+  update_task: { label: "Atualizar tarefa existente", cls: "bg-amber-100 text-amber-700" },
+  create_subtask: { label: "Nova subtarefa", cls: "bg-indigo-100 text-indigo-700" },
+  needs_classification: { label: "Precisa classificação", cls: "bg-muted text-muted-foreground" },
+};
+
+/** Só tarefa genuinamente nova (ou formato antigo, sem "action") deve criar por padrão — o
+ *  resto aponta pra uma tarefa já existente (target_task_code) e criar do zero duplicaria. */
+function isSafeToCreateByDefault(action: ImportAction): boolean {
+  return !action || action === "create_task";
 }
 
 interface JobRef {
@@ -99,9 +118,9 @@ function parseImportJson(raw: string): ImportedTask[] {
   } catch {
     throw new Error("JSON inválido — confira a formatação.");
   }
-  const tasks = Array.isArray(data) ? data : data?.tasks;
+  const tasks = Array.isArray(data) ? data : (data?.tasks ?? data?.actions);
   if (!Array.isArray(tasks) || tasks.length === 0) {
-    throw new Error('Formato inesperado — esperado um array ou um objeto com "tasks": [...]');
+    throw new Error('Formato inesperado — esperado um array, ou um objeto com "tasks": [...] ou "actions": [...]');
   }
   const withTitle = tasks.filter((t) => t && typeof t.title === "string" && t.title.trim());
   if (withTitle.length === 0) {
@@ -238,7 +257,10 @@ export default function TaskImportView() {
       const newRows: ImportRow[] = tasks.map((t, i) => ({
         id: `${Date.now()}-${i}`,
         original: t,
-        selected: true,
+        // Só marca por padrão o que é genuinamente tarefa nova — update_task/
+        // create_subtask/needs_classification apontam pra uma tarefa já
+        // existente (target_task_code) e criar do zero duplicaria.
+        selected: isSafeToCreateByDefault(t.action),
         title: t.title.trim(),
         description: t.description || "",
         ownerUserID: undefined,
@@ -403,9 +425,12 @@ export default function TaskImportView() {
                 </div>
               )}
 
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <Button variant="ghost" size="sm" onClick={() => setRows((prev) => prev.map((r) => ({ ...r, selected: true })))}>Marcar todas</Button>
                 <Button variant="ghost" size="sm" onClick={() => setRows((prev) => prev.map((r) => ({ ...r, selected: false })))}>Desmarcar todas</Button>
+                <span className="text-xs text-muted-foreground">
+                  "Atualizar tarefa existente", "Nova subtarefa" e "Precisa classificação" vêm desmarcadas — criar do zero duplicaria uma tarefa que já existe no Taskrow.
+                </span>
               </div>
 
               <div className="space-y-3">
@@ -462,7 +487,19 @@ function TaskCard({
             className="mt-2.5"
           />
           <div className="flex-1 space-y-1">
-            <Label className="text-xs text-muted-foreground">Título</Label>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <Label className="text-xs text-muted-foreground">Título</Label>
+              {row.original.action && ACTION_LABELS[row.original.action] && (
+                <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${ACTION_LABELS[row.original.action].cls}`}>
+                  {ACTION_LABELS[row.original.action].label}
+                </span>
+              )}
+              {row.original.target_task_code && (
+                <span className="text-[11px] text-muted-foreground">
+                  ref. tarefa #{row.original.target_task_code}
+                </span>
+              )}
+            </div>
             <Input value={row.title} onChange={(e) => onChange({ title: e.target.value })} className="font-medium" />
           </div>
           <div className="mt-2.5 flex items-center gap-2">
