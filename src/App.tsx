@@ -19,7 +19,8 @@ import NPSRespond from "./pages/NPSRespond";
 import AnalyticsView from "./pages/AnalyticsView";
 import ExtranetView from "./pages/ExtranetView";
 import CapacityView from "./pages/CapacityView";
-import AlertsView from "./pages/AlertsView";
+import AdminSettingsView from "./pages/AdminSettingsView";
+import TaskImportView from "./pages/TaskImportView";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -42,7 +43,8 @@ function InternalApp() {
         <Route path="/analytics" element={<AnalyticsView />} />
         <Route path="/extranet" element={<ExtranetView />} />
         <Route path="/capacidade" element={<CapacityView />} />
-        <Route path="/alertas" element={<AlertsView />} />
+        <Route path="/importar" element={<TaskImportView />} />
+        <Route path="/admin" element={<AdminSettingsView />} />
         <Route path="*" element={<NotFound />} />
       </Routes>
     </AppShell>

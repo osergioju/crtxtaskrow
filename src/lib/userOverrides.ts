@@ -1,16 +1,29 @@
 import type { TaskrowUser } from "@/types/taskrow";
 
-/**
- * Overrides locais para campos de usuários que estão incorretos no Taskrow.
- * Chave = UserID. Qualquer campo de TaskrowUser pode ser sobrescrito aqui.
- */
-const USER_OVERRIDES: Record<number, Partial<TaskrowUser>> = {
-  42280: { FunctionGroupName: "Criação" }, // Bruno — cadastrado como Diretoria no Taskrow
-};
+interface UserAreaOverride {
+  userID: number;
+  area: string;
+}
 
-export function applyUserOverrides(users: TaskrowUser[]): TaskrowUser[] {
+/**
+ * Overrides de área por usuário — cadastrados em Configurações Gerais
+ * (substitui o FunctionGroupName do Taskrow quando presente). Endpoint
+ * público: a área de cada usuário é usada em várias telas do dashboard.
+ */
+export async function applyUserOverrides(users: TaskrowUser[]): Promise<TaskrowUser[]> {
+  let overrides: UserAreaOverride[] = [];
+  try {
+    const res = await fetch("/api/admin/user-areas");
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data.userAreas)) overrides = data.userAreas;
+    }
+  } catch {
+    // servidor indisponível — segue com os dados crus do Taskrow
+  }
+  const areaByUserId = new Map(overrides.map((o) => [o.userID, o.area]));
   return users.map((u) => {
-    const override = USER_OVERRIDES[u.UserID];
-    return override ? { ...u, ...override } : u;
+    const area = areaByUserId.get(u.UserID);
+    return area ? { ...u, FunctionGroupName: area } : u;
   });
 }

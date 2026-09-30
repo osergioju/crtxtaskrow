@@ -36,7 +36,7 @@ const TOKENS_FILE = path.join(DATA_DIR, "nps_tokens.json");
 const RESPONSES_FILE = path.join(DATA_DIR, "nps_responses.json");
 const CYCLES_FILE = path.join(DATA_DIR, "nps_cycles.json");
 const CONFIG_FILE = path.join(DATA_DIR, "config.json");
-const ALERTS_FILE = path.join(DATA_DIR, "alerts.json");
+const ADMIN_FILE = path.join(DATA_DIR, "admin.json");
 const USERS_FILE = path.join(DATA_DIR, "users.json");
 
 // ── Data helpers ──────────────────────────────────────────────────────────────
@@ -270,7 +270,9 @@ function serveFile(res, filePath) {
 
 function proxyTaskrow(req, res, rawUrl) {
   const targetPath = rawUrl.replace(/^\/taskrow-api/, "") || "/";
-  const apiKey = readConfig().taskrowApiKey || req.headers["__identifier"] || "";
+  // Cada usuário usa a própria chave pessoal do Taskrow — nunca a chave global
+  // do servidor (essa é só para jobs de fundo: analytics/alertas).
+  const apiKey = req.headers["__identifier"] || "";
 
   const chunks = [];
   req.on("data", (d) => chunks.push(d));
@@ -415,36 +417,16 @@ function runAnalyticsPipeline() {
 }
 
 async function handleAnalyticsApi(req, res, urlPath, method) {
-  // ── POST /api/config — salva API key no servidor ───────────────────────────
-  if (urlPath === "/api/config" && method === "POST") {
-    const body = await parseBody(req);
-    const cfg = readConfig();
-    if (body.taskrowApiKey !== undefined) {
-      cfg.taskrowApiKey = body.taskrowApiKey;
-      saveConfig(cfg);
-      console.log("[config] API key do Taskrow atualizada.");
-      // Se não tem tasks.json ainda, dispara fetch em background
-      if (cfg.taskrowApiKey && !fs.existsSync(TASKS_FILE)) {
-        fetchTasksFromTaskrow(cfg.taskrowApiKey).catch((e) =>
-          console.error("[taskrow] Fetch background falhou:", e.message)
-        );
-      }
-    }
-    return sendJson(res, 200, { ok: true });
-  }
-
   // ── POST /api/analytics/refresh — força re-fetch da Taskrow + re-análise ──
+  // Usa sempre a chave de fundo configurada em Configurações Gerais — nunca
+  // aceita uma chave vinda da requisição (isso permitia que qualquer usuário
+  // sobrescrevesse a chave global só de clicar em "atualizar").
   if (urlPath === "/api/analytics/refresh" && method === "POST") {
     analyticsCache = null;
-    const body = await parseBody(req);
-    const apiKey = body.apiKey || req.headers["x-taskrow-key"] || readConfig().taskrowApiKey || "";
+    const apiKey = readConfig().taskrowApiKey || "";
     if (!apiKey) {
-      return sendJson(res, 400, { error: "API key não configurada. Configure em Ajustes." });
+      return sendJson(res, 400, { error: "Chave de API de fundo não configurada. Peça ao admin pra configurar em Configurações Gerais." });
     }
-    // Salva key para uso futuro
-    const cfg = readConfig();
-    cfg.taskrowApiKey = apiKey;
-    saveConfig(cfg);
     try {
       await fetchTasksFromTaskrow(apiKey);
     } catch (err) {
@@ -605,24 +587,26 @@ async function handleNpsApi(req, res, urlPath, method) {
   return sendJson(res, 404, { error: "Endpoint não encontrado" });
 }
 
-// ── Alertas de WhatsApp (tarefas atrasadas por área) ───────────────────────────
+// ── Configurações Gerais (admin único) + Alertas no Teams ──────────────────────
 
-const DEFAULT_ALERTS = {
+const DEFAULT_ADMIN = {
   auth: null, // { username, salt, passwordHash } — gerado no primeiro boot
   schedule: { enabled: true, hour: 8, minute: 0, weekdaysOnly: true },
   responsaveis: [], // [{ area, name, email, webhookUrl }] — webhook do canal do Teams
   lastRun: null,    // { at, dryRun, results: [{ area, count, status, detail }] }
   lastRunDate: null, // "YYYY-MM-DD" — evita disparo automático duplicado no dia
+  userAreas: [],   // [{ userID, area }] — override manual de área por usuário
+  teamsLinks: [],  // [{ userID, teamsEmail, disabled }] — vínculo Taskrow↔Teams
 };
 
-function readAlerts() {
+function readAdmin() {
   try {
-    return { ...DEFAULT_ALERTS, ...JSON.parse(fs.readFileSync(ALERTS_FILE, "utf-8")) };
+    return { ...DEFAULT_ADMIN, ...JSON.parse(fs.readFileSync(ADMIN_FILE, "utf-8")) };
   } catch {
-    return { ...DEFAULT_ALERTS };
+    return { ...DEFAULT_ADMIN };
   }
 }
-function saveAlerts(d) { fs.writeFileSync(ALERTS_FILE, JSON.stringify(d, null, 2), "utf-8"); }
+function saveAdmin(d) { fs.writeFileSync(ADMIN_FILE, JSON.stringify(d, null, 2), "utf-8"); }
 
 // ── Auth simples (sem dependências) ─────────────────────────────────────────────
 
@@ -630,16 +614,16 @@ const hashPassword = (password, salt) =>
   createHash("sha256").update(salt + password).digest("hex");
 
 /** Gera login/senha no primeiro boot e devolve a senha em texto (uma única vez). */
-function ensureAlertsAuth() {
-  const alerts = readAlerts();
-  if (alerts.auth && alerts.auth.passwordHash) return null;
+function ensureAdminAuth() {
+  const admin = readAdmin();
+  if (admin.auth && admin.auth.passwordHash) return null;
   const username = "admin";
   const password = randomBytes(9).toString("base64").replace(/[+/=]/g, "").slice(0, 12);
   const salt = randomBytes(16).toString("hex");
-  alerts.auth = { username, salt, passwordHash: hashPassword(password, salt) };
-  saveAlerts(alerts);
+  admin.auth = { username, salt, passwordHash: hashPassword(password, salt) };
+  saveAdmin(admin);
   console.log("\n========================================================");
-  console.log("  ALERTAS WHATSAPP — credenciais de acesso geradas:");
+  console.log("  CONFIGURAÇÕES GERAIS — credenciais de acesso geradas:");
   console.log(`  Login: ${username}`);
   console.log(`  Senha: ${password}`);
   console.log("  (guarde — só é exibida uma vez)");
@@ -666,7 +650,7 @@ function bearerToken(req) {
   return h.startsWith("Bearer ") ? h.slice(7) : "";
 }
 function checkLogin(username, password) {
-  const auth = readAlerts().auth;
+  const auth = readAdmin().auth;
   if (!auth) return false;
   if (username !== auth.username) return false;
   const got = Buffer.from(hashPassword(password, auth.salt));
@@ -731,10 +715,15 @@ function isOverdueCRT(task) {
   return true;
 }
 
+/** Área de um usuário: override manual (Configurações Gerais) > FunctionGroupName do Taskrow. */
+function resolveArea(user, areaOverrides) {
+  return areaOverrides.get(user.UserID) || user.FunctionGroupName || "Sem Área";
+}
+
 /** Agrupa as tarefas atrasadas (CRT) por área usando o mapa ownerUserID→área. */
-function buildOverdueByArea(tasks, users) {
+function buildOverdueByArea(tasks, users, areaOverrides = new Map()) {
   const userArea = new Map();
-  users.forEach((u) => userArea.set(u.UserID, u.FunctionGroupName || "Sem Área"));
+  users.forEach((u) => userArea.set(u.UserID, resolveArea(u, areaOverrides)));
   const byArea = new Map(); // area -> tasks[]
   for (const t of tasks) {
     if (!isOverdueCRT(t)) continue;
@@ -743,6 +732,15 @@ function buildOverdueByArea(tasks, users) {
     byArea.get(area).push(t);
   }
   return byArea;
+}
+
+/** Identidade Teams de um dono de tarefa: override cadastrado > MainEmail do Taskrow. */
+function resolveTeamsMention(user, teamsLinks) {
+  if (!user) return null;
+  const link = teamsLinks.find((l) => l.userID === user.UserID);
+  if (link?.disabled) return null;
+  const email = (link?.teamsEmail || user.MainEmail || "").trim();
+  return email ? { name: user.FullName || "Alguém", email } : null;
 }
 
 // ── Envio via Microsoft Teams (webhook do Power Automate) ────────────────────────
@@ -789,26 +787,61 @@ function taskLine(t) {
   return `• ${title}${due ? ` (venceu ${due})` : ""}${t.clientNickName ? ` — ${t.clientNickName}` : ""}`;
 }
 
-/** Texto plano do resumo (usado na pré-visualização). */
-function buildPreviewText(r, tasks, max = 15) {
-  const greet = r.name ? `${r.name}` : "equipe";
-  const lines = tasks.slice(0, max).map(taskLine);
-  if (tasks.length > max) lines.push(`…e mais ${tasks.length - max}`);
-  return `⚠️ ${greet}, a área ${r.area} tem ${tasks.length} tarefa(s) atrasada(s):\n${lines.join("\n")}\n\nAcesse o painel CRT para resolver.`;
+/** Agrupa tarefas por dono (ownerUserID), preservando a ordem original. */
+function groupTasksByOwner(tasks) {
+  const map = new Map();
+  for (const t of tasks) {
+    if (!map.has(t.ownerUserID)) map.set(t.ownerUserID, []);
+    map.get(t.ownerUserID).push(t);
+  }
+  return map;
 }
 
-/** Monta o payload do Teams (Adaptive Card) com @menção opcional ao responsável. */
-function buildTeamsPayload(r, tasks, max = 15) {
-  const useMention = !!(r.email && r.name);
-  const mentionTag = useMention ? `<at>${r.name}</at>` : (r.name || "equipe");
+/** Texto plano do resumo (usado na pré-visualização), agrupado por dono da tarefa. */
+function buildPreviewText(area, tasks, usersById, teamsLinks, max = 15) {
+  const byOwner = groupTasksByOwner(tasks);
+  const blocks = [];
+  let shown = 0;
+  for (const [ownerID, ownerTasks] of byOwner) {
+    if (shown >= max) break;
+    const user = usersById.get(ownerID);
+    const mention = resolveTeamsMention(user, teamsLinks);
+    const who = mention ? mention.name : (user?.FullName || "Sem responsável");
+    const remaining = max - shown;
+    const lines = ownerTasks.slice(0, remaining).map(taskLine);
+    shown += lines.length;
+    blocks.push(`${who} (${ownerTasks.length}):\n${lines.join("\n")}`);
+  }
+  const footer = tasks.length > shown ? `\n…e mais ${tasks.length - shown}` : "";
+  return `⚠️ Área ${area} tem ${tasks.length} tarefa(s) atrasada(s):\n\n${blocks.join("\n\n")}${footer}\n\nAcesse o painel CRT para resolver.`;
+}
+
+/** Monta o payload do Teams (Adaptive Card), @mencionando cada dono das tarefas atrasadas. */
+function buildTeamsPayload(area, tasks, usersById, teamsLinks, max = 15) {
+  const byOwner = groupTasksByOwner(tasks);
   const body = [
     { type: "TextBlock", size: "Large", weight: "Bolder", wrap: true,
-      text: `⚠️ ${tasks.length} tarefa(s) atrasada(s) — ${r.area}` },
-    { type: "TextBlock", wrap: true,
-      text: `Bom dia, ${mentionTag}! Estas tarefas da área **${r.area}** estão atrasadas:` },
-    ...tasks.slice(0, max).map((t) => ({ type: "TextBlock", wrap: true, spacing: "Small", text: taskLine(t) })),
+      text: `⚠️ ${tasks.length} tarefa(s) atrasada(s) — ${area}` },
   ];
-  if (tasks.length > max) body.push({ type: "TextBlock", isSubtle: true, wrap: true, text: `…e mais ${tasks.length - max}` });
+  const entities = [];
+  const seenEmails = new Set();
+  let shown = 0;
+  for (const [ownerID, ownerTasks] of byOwner) {
+    if (shown >= max) break;
+    const user = usersById.get(ownerID);
+    const mention = resolveTeamsMention(user, teamsLinks);
+    const who = mention ? `<at>${mention.name}</at>` : (user?.FullName || "Sem responsável");
+    if (mention && !seenEmails.has(mention.email)) {
+      seenEmails.add(mention.email);
+      entities.push({ type: "mention", text: `<at>${mention.name}</at>`, mentioned: { id: mention.email, name: mention.name } });
+    }
+    body.push({ type: "TextBlock", wrap: true, spacing: "Medium", weight: "Bolder", text: `${who} — ${ownerTasks.length} tarefa(s)` });
+    const remaining = max - shown;
+    const lines = ownerTasks.slice(0, remaining);
+    shown += lines.length;
+    lines.forEach((t) => body.push({ type: "TextBlock", wrap: true, spacing: "Small", text: taskLine(t) }));
+  }
+  if (tasks.length > shown) body.push({ type: "TextBlock", isSubtle: true, wrap: true, text: `…e mais ${tasks.length - shown}` });
   body.push({ type: "TextBlock", isSubtle: true, wrap: true, spacing: "Medium", text: "Acesse o painel CRT para resolver." });
 
   const card = {
@@ -817,39 +850,40 @@ function buildTeamsPayload(r, tasks, max = 15) {
     version: "1.4",
     body,
   };
-  if (useMention) {
-    card.msteams = { entities: [{ type: "mention", text: `<at>${r.name}</at>`, mentioned: { id: r.email, name: r.name } }] };
-  }
+  if (entities.length) card.msteams = { entities };
   return { type: "message", attachments: [{ contentType: "application/vnd.microsoft.card.adaptive", content: card }] };
 }
 
 /**
  * Núcleo do job: lê tarefas/usuários, agrupa atrasadas por área e envia (ou
- * apenas pré-visualiza, em dryRun) o resumo para o responsável de cada área.
+ * apenas pré-visualiza, em dryRun) o resumo pro canal do Teams de cada área,
+ * @mencionando individualmente o dono de cada tarefa atrasada.
  */
 async function runOverdueAlerts({ dryRun = false } = {}) {
-  const alerts = readAlerts();
+  const admin = readAdmin();
   const apiKey = readConfig().taskrowApiKey;
-  if (!apiKey) throw new Error("API key do Taskrow não configurada (aba Configurações).");
+  if (!apiKey) throw new Error("API key do Taskrow não configurada (Configurações Gerais).");
 
   // 1. Atualiza tarefas (reutiliza fetch paginado) + usuários
   await fetchTasksFromTaskrow(apiKey);
   const tasks = readJSON(TASKS_FILE);
   const users = await fetchUsersFromTaskrow(apiKey);
+  const usersById = new Map(users.map((u) => [u.UserID, u]));
+  const areaOverrides = new Map(admin.userAreas.map((o) => [o.userID, o.area]));
 
-  // 2. Agrupa atrasadas por área
-  const byArea = buildOverdueByArea(tasks, users);
+  // 2. Agrupa atrasadas por área (respeitando overrides de área)
+  const byArea = buildOverdueByArea(tasks, users, areaOverrides);
 
   // 3. Para cada área com responsável configurado, monta e posta no canal do Teams
   const results = [];
-  for (const r of alerts.responsaveis) {
+  for (const r of admin.responsaveis) {
     const overdue = byArea.get(r.area) || [];
     if (overdue.length === 0) {
       results.push({ area: r.area, count: 0, status: "skipped", detail: "nenhuma atrasada" });
       continue;
     }
     if (dryRun) {
-      results.push({ area: r.area, count: overdue.length, status: "preview", detail: buildPreviewText(r, overdue) });
+      results.push({ area: r.area, count: overdue.length, status: "preview", detail: buildPreviewText(r.area, overdue, usersById, admin.teamsLinks) });
       continue;
     }
     if (!r.webhookUrl) {
@@ -857,25 +891,25 @@ async function runOverdueAlerts({ dryRun = false } = {}) {
       continue;
     }
     try {
-      await postJson(r.webhookUrl, buildTeamsPayload(r, overdue));
-      results.push({ area: r.area, count: overdue.length, status: "sent", detail: `postado no Teams${r.name ? ` (@${r.name})` : ""}` });
+      await postJson(r.webhookUrl, buildTeamsPayload(r.area, overdue, usersById, admin.teamsLinks));
+      results.push({ area: r.area, count: overdue.length, status: "sent", detail: "postado no Teams (menção por dono da tarefa)" });
     } catch (e) {
       results.push({ area: r.area, count: overdue.length, status: "error", detail: e.message });
     }
   }
 
-  const fresh = readAlerts();
+  const fresh = readAdmin();
   fresh.lastRun = { at: new Date().toISOString(), dryRun, results };
   if (!dryRun) fresh.lastRunDate = new Date().toISOString().slice(0, 10);
-  saveAlerts(fresh);
+  saveAdmin(fresh);
   return results;
 }
 
-// ── Alertas API ─────────────────────────────────────────────────────────────────
+// ── Configurações Gerais API (admin único) ──────────────────────────────────────
 
-async function handleAlertsApi(req, res, urlPath, method) {
-  // POST /api/alerts/login — público
-  if (urlPath === "/api/alerts/login" && method === "POST") {
+async function handleAdminApi(req, res, urlPath, method) {
+  // POST /api/admin/login — público
+  if (urlPath === "/api/admin/login" && method === "POST") {
     const body = await parseBody(req);
     if (!checkLogin(String(body.username || ""), String(body.password || ""))) {
       return sendJson(res, 401, { error: "Usuário ou senha inválidos." });
@@ -883,14 +917,41 @@ async function handleAlertsApi(req, res, urlPath, method) {
     return sendJson(res, 200, { token: createSession() });
   }
 
+  // GET /api/admin/user-areas — público (metadado organizacional, usado no dashboard inteiro)
+  if (urlPath === "/api/admin/user-areas" && method === "GET") {
+    return sendJson(res, 200, { userAreas: readAdmin().userAreas });
+  }
+
   // Demais endpoints exigem sessão válida
   if (!validSession(bearerToken(req))) {
     return sendJson(res, 401, { error: "Não autenticado." });
   }
 
-  // GET /api/alerts/config — webhook mascarado (é um segredo: quem tem a URL posta)
-  if (urlPath === "/api/alerts/config" && method === "GET") {
-    const a = readAlerts();
+  // GET /api/admin/config — chave de API de fundo (mascarada, usada por analytics/alertas)
+  if (urlPath === "/api/admin/config" && method === "GET") {
+    const cfg = readConfig();
+    return sendJson(res, 200, { taskrowApiKey: cfg.taskrowApiKey ? "••••••••" : "" });
+  }
+
+  // POST /api/admin/config — salva a chave de API de fundo
+  if (urlPath === "/api/admin/config" && method === "POST") {
+    const body = await parseBody(req);
+    if (typeof body.taskrowApiKey === "string" && !body.taskrowApiKey.includes("•")) {
+      const cfg = readConfig();
+      cfg.taskrowApiKey = body.taskrowApiKey.trim();
+      saveConfig(cfg);
+      if (cfg.taskrowApiKey && !fs.existsSync(TASKS_FILE)) {
+        fetchTasksFromTaskrow(cfg.taskrowApiKey).catch((e) =>
+          console.error("[taskrow] Fetch background falhou:", e.message)
+        );
+      }
+    }
+    return sendJson(res, 200, { ok: true });
+  }
+
+  // GET /api/admin/teams — webhook mascarado (é um segredo: quem tem a URL posta)
+  if (urlPath === "/api/admin/teams" && method === "GET") {
+    const a = readAdmin();
     return sendJson(res, 200, {
       responsaveis: a.responsaveis.map((r) => ({
         area: r.area,
@@ -903,10 +964,10 @@ async function handleAlertsApi(req, res, urlPath, method) {
     });
   }
 
-  // POST /api/alerts/config — salva responsáveis / schedule
-  if (urlPath === "/api/alerts/config" && method === "POST") {
+  // POST /api/admin/teams — salva responsáveis / schedule
+  if (urlPath === "/api/admin/teams" && method === "POST") {
     const body = await parseBody(req);
-    const a = readAlerts();
+    const a = readAdmin();
     if (Array.isArray(body.responsaveis)) {
       const prevByArea = new Map(a.responsaveis.map((r) => [r.area, r]));
       a.responsaveis = body.responsaveis.map((r) => {
@@ -925,27 +986,28 @@ async function handleAlertsApi(req, res, urlPath, method) {
         weekdaysOnly: !!body.schedule.weekdaysOnly,
       };
     }
-    saveAlerts(a);
+    saveAdmin(a);
     return sendJson(res, 200, { ok: true });
   }
 
-  // GET /api/alerts/areas — áreas com contagem atual de atrasadas (CRT)
-  if (urlPath === "/api/alerts/areas" && method === "GET") {
+  // GET /api/admin/teams/areas — áreas com contagem atual de atrasadas (CRT)
+  if (urlPath === "/api/admin/teams/areas" && method === "GET") {
     const tasks = readJSON(TASKS_FILE);
     let users = readJSON(USERS_FILE);
     if (!Array.isArray(users) || !users.length) {
       const apiKey = readConfig().taskrowApiKey;
       if (apiKey) { try { users = await fetchUsersFromTaskrow(apiKey); } catch {} }
     }
-    const byArea = buildOverdueByArea(Array.isArray(tasks) ? tasks : [], Array.isArray(users) ? users : []);
+    const areaOverrides = new Map(readAdmin().userAreas.map((o) => [o.userID, o.area]));
+    const byArea = buildOverdueByArea(Array.isArray(tasks) ? tasks : [], Array.isArray(users) ? users : [], areaOverrides);
     const areas = Array.from(byArea.entries())
       .map(([area, list]) => ({ area, overdue: list.length }))
       .sort((a, b) => b.overdue - a.overdue);
     return sendJson(res, 200, { areas });
   }
 
-  // POST /api/alerts/run?dryRun=1 — dispara agora (ou pré-visualiza)
-  if (urlPath === "/api/alerts/run" && method === "POST") {
+  // POST /api/admin/teams/run?dryRun=1 — dispara agora (ou pré-visualiza)
+  if (urlPath === "/api/admin/teams/run" && method === "POST") {
     const dryRun = /[?&]dryRun=1\b/.test(req.url || "");
     try {
       const results = await runOverdueAlerts({ dryRun });
@@ -955,13 +1017,48 @@ async function handleAlertsApi(req, res, urlPath, method) {
     }
   }
 
+  // GET /api/admin/teams-links — vínculo Taskrow↔Teams por usuário
+  if (urlPath === "/api/admin/teams-links" && method === "GET") {
+    return sendJson(res, 200, { teamsLinks: readAdmin().teamsLinks });
+  }
+
+  // POST /api/admin/teams-links — salva vínculo Taskrow↔Teams por usuário
+  if (urlPath === "/api/admin/teams-links" && method === "POST") {
+    const body = await parseBody(req);
+    const a = readAdmin();
+    if (Array.isArray(body.teamsLinks)) {
+      a.teamsLinks = body.teamsLinks
+        .map((l) => ({
+          userID: Number(l.userID),
+          teamsEmail: String(l.teamsEmail || "").trim(),
+          disabled: !!l.disabled,
+        }))
+        .filter((l) => Number.isFinite(l.userID) && (l.teamsEmail || l.disabled));
+    }
+    saveAdmin(a);
+    return sendJson(res, 200, { ok: true });
+  }
+
+  // POST /api/admin/user-areas — salva override de área por usuário
+  if (urlPath === "/api/admin/user-areas" && method === "POST") {
+    const body = await parseBody(req);
+    const a = readAdmin();
+    if (Array.isArray(body.userAreas)) {
+      a.userAreas = body.userAreas
+        .map((o) => ({ userID: Number(o.userID), area: String(o.area || "").trim() }))
+        .filter((o) => Number.isFinite(o.userID) && o.area);
+    }
+    saveAdmin(a);
+    return sendJson(res, 200, { ok: true });
+  }
+
   return sendJson(res, 404, { error: "Endpoint não encontrado" });
 }
 
 // ── Agendador (sem dependências) ────────────────────────────────────────────────
 
-function alertsScheduleTick() {
-  const a = readAlerts();
+function adminScheduleTick() {
+  const a = readAdmin();
   if (!a.schedule?.enabled) return;
   const now = new Date();
   if (a.schedule.weekdaysOnly && (now.getDay() === 0 || now.getDay() === 6)) return;
@@ -982,12 +1079,6 @@ const server = http.createServer(async (req, res) => {
   const method = (req.method ?? "GET").toUpperCase();
 
   try {
-    // Config API (API key server-side)
-    if (urlPath === "/api/config") {
-      await handleAnalyticsApi(req, res, urlPath, method);
-      return;
-    }
-
     // Analytics API
     if (urlPath.startsWith("/api/analytics")) {
       await handleAnalyticsApi(req, res, urlPath, method);
@@ -1000,9 +1091,9 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    // Alertas (WhatsApp) API
-    if (urlPath.startsWith("/api/alerts")) {
-      await handleAlertsApi(req, res, urlPath, method);
+    // Configurações Gerais (admin único: chave de fundo, Teams, vínculos, áreas)
+    if (urlPath.startsWith("/api/admin")) {
+      await handleAdminApi(req, res, urlPath, method);
       return;
     }
 
@@ -1025,8 +1116,8 @@ const server = http.createServer(async (req, res) => {
 server.setTimeout(10 * 60 * 1000); // 10 min — fetch paginado da Taskrow pode demorar
 server.listen(PORT, () => {
   console.log(`CRTTask running on http://localhost:${PORT}`);
-  // Garante credenciais de acesso à aba de Alertas (exibe senha 1x no boot)
-  ensureAlertsAuth();
+  // Garante credenciais de acesso a Configurações Gerais (exibe senha 1x no boot)
+  ensureAdminAuth();
   // Agendador de alertas — checa a cada 60s se está na hora do disparo diário
-  setInterval(alertsScheduleTick, 60 * 1000);
+  setInterval(adminScheduleTick, 60 * 1000);
 });

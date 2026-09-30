@@ -1,6 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import type { AnalyticsResult } from "@/types/analytics";
-import { useDashboardStore } from "@/store/dashboardStore";
 
 export type AnalyticsResponse =
   | (AnalyticsResult & { needs_refresh?: never })
@@ -26,14 +25,11 @@ export function useAnalytics() {
 
 export function useRefreshAnalytics() {
   const qc = useQueryClient();
-  const apiKey = useDashboardStore((s) => s.apiKey);
   return useMutation({
     mutationFn: async () => {
-      const res = await fetch("/api/analytics/refresh", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ apiKey }),
-      });
+      // Usa a chave de fundo configurada em Configurações Gerais (server-side) —
+      // não envia a chave pessoal do usuário, que é só pra visualização própria.
+      const res = await fetch("/api/analytics/refresh", { method: "POST" });
       if (!res.ok) {
         const err = await res.json().catch(() => ({ error: res.statusText }));
         throw new Error(err.error ?? "Falha ao atualizar analytics");

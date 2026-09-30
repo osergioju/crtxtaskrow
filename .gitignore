@@ -1,5 +1,8 @@
 .env
 
-# Runtime: segredos e caches da feature de Alertas (não versionar)
-data/alerts.json
+# Runtime: segredos e caches de Configurações Gerais / Alertas (não versionar)
+data/admin.json
 data/users.json
+
+# Segredo: chave de API do Taskrow usada pelos jobs de fundo (analytics/alertas)
+data/config.json
