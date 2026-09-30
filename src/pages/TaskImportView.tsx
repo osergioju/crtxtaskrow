@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { FileJson, Upload, Loader2, CheckCircle2, XCircle, Circle, Send, ChevronsUpDown } from "lucide-react";
+import { FileJson, Upload, Loader2, CheckCircle2, XCircle, Circle, Send, ChevronsUpDown, ExternalLink, Link2Off } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -18,7 +18,8 @@ import { useUsers } from "@/hooks/useUsers";
 import { useClients } from "@/hooks/useClients";
 import { useProjects } from "@/hooks/useProjects";
 import { apiPost } from "@/lib/api";
-import type { TaskrowUser } from "@/types/taskrow";
+import { taskrowLink } from "@/lib/taskrowLink";
+import type { TaskrowTask, TaskrowUser } from "@/types/taskrow";
 
 /** action: presente no formato v1.1 (schema "actions") — ausente no v1.0 (schema "tasks", sempre nova tarefa). */
 type ImportAction = "create_task" | "update_task" | "create_subtask" | "needs_classification" | null | undefined;
@@ -70,6 +71,14 @@ interface ImportRow {
   job: JobRef | undefined;
   status: "idle" | "pending" | "success" | "error";
   resultMessage?: string;
+}
+
+/** Item que se refere a uma tarefa já existente (update_task/create_subtask) — cliente/projeto
+ *  resolvidos automaticamente a partir do cache local de tarefas, pelo número referenciado. */
+interface ExistingRefRow {
+  id: string;
+  original: ImportedTask;
+  resolved: TaskrowTask | null; // null = ainda não resolvido ou não encontrado no cache local
 }
 
 /**
@@ -239,6 +248,7 @@ export default function TaskImportView() {
   const [raw, setRaw] = useState("");
   const [parseError, setParseError] = useState("");
   const [rows, setRows] = useState<ImportRow[]>([]);
+  const [existingRows, setExistingRows] = useState<ExistingRefRow[]>([]);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [sameForAll, setSameForAll] = useState(true);
   const [globalClientID, setGlobalClientID] = useState<number | undefined>(undefined);
@@ -250,16 +260,37 @@ export default function TaskImportView() {
   const { data: users, isLoading: loadingUsers } = useUsers();
   const { data: globalProjects, isLoading: loadingGlobalProjects } = useProjects(globalClientID);
 
+  /** Resolve cliente/projeto/tarefa de itens que apontam pra uma tarefa já existente,
+   *  buscando no cache local de tarefas (data/tasks.json) pelo número referenciado. */
+  const resolveExistingRefs = async (items: ExistingRefRow[]) => {
+    const codes = Array.from(new Set(items.map((r) => r.original.target_task_code).filter(Boolean))) as string[];
+    if (codes.length === 0) return;
+    try {
+      const res = await fetch(`/api/tasks/by-number?numbers=${encodeURIComponent(codes.join(","))}`);
+      const data = await res.json();
+      const byNumber = new Map<string, TaskrowTask>((data.tasks || []).map((t: TaskrowTask) => [String(t.taskNumber), t]));
+      setExistingRows((prev) => prev.map((r) => ({
+        ...r,
+        resolved: (r.original.target_task_code && byNumber.get(r.original.target_task_code)) || null,
+      })));
+    } catch {
+      // silencioso — cada card mostra "não encontrado automaticamente" se resolved ficar null
+    }
+  };
+
   const process = () => {
     setParseError("");
     try {
       const tasks = parseImportJson(raw);
-      const newRows: ImportRow[] = tasks.map((t, i) => ({
+      // update_task/create_subtask apontam pra uma tarefa já existente
+      // (target_task_code) — vão pra um bloco separado, sem passar pelo
+      // fluxo de "criar tarefa nova".
+      const mainTasks = tasks.filter((t) => !t.target_task_code);
+      const refTasks = tasks.filter((t) => t.target_task_code);
+
+      const newRows: ImportRow[] = mainTasks.map((t, i) => ({
         id: `${Date.now()}-${i}`,
         original: t,
-        // Só marca por padrão o que é genuinamente tarefa nova — update_task/
-        // create_subtask/needs_classification apontam pra uma tarefa já
-        // existente (target_task_code) e criar do zero duplicaria.
         selected: isSafeToCreateByDefault(t.action),
         title: t.title.trim(),
         description: t.description || "",
@@ -272,6 +303,15 @@ export default function TaskImportView() {
         status: "idle",
       }));
       setRows(newRows);
+
+      const newExistingRows: ExistingRefRow[] = refTasks.map((t, i) => ({
+        id: `ref-${Date.now()}-${i}`,
+        original: t,
+        resolved: null,
+      }));
+      setExistingRows(newExistingRows);
+      resolveExistingRefs(newExistingRows);
+
       setSheetOpen(true);
     } catch (e: any) {
       setParseError(e.message || "Erro ao processar o JSON.");
@@ -384,7 +424,7 @@ export default function TaskImportView() {
       <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
         <SheetContent className="flex w-full flex-col gap-0 p-0 sm:max-w-[1100px]">
           <SheetHeader className="border-b px-6 py-4">
-            <SheetTitle>{selectedCount} de {rows.length} tarefa(s) selecionada(s) para importar</SheetTitle>
+            <SheetTitle>{selectedCount} de {rows.length} nova(s) tarefa(s) selecionada(s){existingRows.length > 0 ? ` · ${existingRows.length} relacionada(s) a tarefas existentes` : ""}</SheetTitle>
             <SheetDescription>Marque o que entra, edite título/descrição, e defina responsável, participantes, prazo, cliente e projeto.</SheetDescription>
           </SheetHeader>
 
@@ -429,7 +469,7 @@ export default function TaskImportView() {
                 <Button variant="ghost" size="sm" onClick={() => setRows((prev) => prev.map((r) => ({ ...r, selected: true })))}>Marcar todas</Button>
                 <Button variant="ghost" size="sm" onClick={() => setRows((prev) => prev.map((r) => ({ ...r, selected: false })))}>Desmarcar todas</Button>
                 <span className="text-xs text-muted-foreground">
-                  "Atualizar tarefa existente", "Nova subtarefa" e "Precisa classificação" vêm desmarcadas — criar do zero duplicaria uma tarefa que já existe no Taskrow.
+                  "Precisa classificação" vem desmarcada por padrão — revise antes de criar.
                 </span>
               </div>
 
@@ -445,6 +485,24 @@ export default function TaskImportView() {
                   />
                 ))}
               </div>
+
+              {existingRows.length > 0 && (
+                <>
+                  <div className="pt-2">
+                    <h3 className="text-sm font-semibold">Relacionadas a tarefas existentes</h3>
+                    <p className="text-xs text-muted-foreground">
+                      Atualização de tarefa ou nova subtarefa — cliente/projeto resolvidos automaticamente pelo número
+                      referenciado. Ainda não criam/atualizam nada por aqui: use o link pra abrir a tarefa no Taskrow
+                      e aplicar manualmente.
+                    </p>
+                  </div>
+                  <div className="space-y-3">
+                    {existingRows.map((row) => (
+                      <ExistingRefCard key={row.id} row={row} />
+                    ))}
+                  </div>
+                </>
+              )}
             </div>
           </div>
 
@@ -589,6 +647,47 @@ function TaskCard({
             </p>
           )}
         </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function ExistingRefCard({ row }: { row: ExistingRefRow }) {
+  const t = row.original;
+  const action = t.action ? ACTION_LABELS[t.action] : undefined;
+
+  return (
+    <Card>
+      <CardContent className="space-y-2 p-4">
+        <div className="flex flex-wrap items-center gap-1.5">
+          {action && (
+            <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${action.cls}`}>{action.label}</span>
+          )}
+          <span className="text-[11px] text-muted-foreground">ref. tarefa #{t.target_task_code}</span>
+        </div>
+        <p className="font-medium">{t.title}</p>
+        {t.description && <p className="text-sm text-muted-foreground">{t.description}</p>}
+
+        {row.resolved ? (
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-muted/50 p-2.5 text-sm">
+            <div>
+              <p className="font-medium">{row.resolved.taskTitle}</p>
+              <p className="text-xs text-muted-foreground">
+                {row.resolved.clientDisplayName} — {row.resolved.jobTitle}
+              </p>
+            </div>
+            <Button variant="outline" size="sm" className="gap-1.5" asChild>
+              <a href={taskrowLink(row.resolved)} target="_blank" rel="noreferrer">
+                <ExternalLink className="h-3.5 w-3.5" /> Abrir no Taskrow
+              </a>
+            </Button>
+          </div>
+        ) : (
+          <div className="flex items-center gap-1.5 rounded-md bg-muted/50 p-2.5 text-xs text-muted-foreground">
+            <Link2Off className="h-3.5 w-3.5 shrink-0" />
+            Tarefa #{t.target_task_code} não encontrada no cache local (pode estar fora do período sincronizado) — busque manualmente no Taskrow.
+          </div>
+        )}
       </CardContent>
     </Card>
   );

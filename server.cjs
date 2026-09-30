@@ -1146,6 +1146,20 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    // Busca tarefas já sincronizadas (cache local) por número — usado pra
+    // resolver cliente/projeto de tarefas existentes na importação via JSON,
+    // sem precisar de mais uma chamada autenticada à Taskrow por item.
+    if (urlPath === "/api/tasks/by-number" && method === "GET") {
+      const url = new URL(rawUrl, "http://internal");
+      const numbers = new Set(
+        (url.searchParams.get("numbers") || "").split(",").map((s) => s.trim()).filter(Boolean)
+      );
+      const tasks = readJSON(TASKS_FILE);
+      const matches = (Array.isArray(tasks) ? tasks : []).filter((t) => numbers.has(String(t.taskNumber)));
+      sendJson(res, 200, { tasks: matches });
+      return;
+    }
+
     // Taskrow reverse-proxy
     if (urlPath.startsWith("/taskrow-api")) {
       proxyTaskrow(req, res, rawUrl);
