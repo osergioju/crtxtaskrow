@@ -2,6 +2,7 @@
 
 const http = require("http");
 const https = require("https");
+const zlib = require("zlib");
 const fs = require("fs");
 const path = require("path");
 const { randomUUID, randomBytes, createHash, timingSafeEqual } = require("crypto");
@@ -297,14 +298,29 @@ function proxyTaskrow(req, res, rawUrl) {
       },
       (proxyRes) => {
         const status = proxyRes.statusCode || 200;
-        // Em erro, loga o corpo da resposta da Taskrow (pm2 logs) — sem isso,
-        // um 4xx/5xx dela chegava até o navegador mas nunca aparecia no log.
+        // Em erro, loga headers + corpo (descomprimindo se vier gzip/deflate/br) —
+        // sem isso, um 4xx/5xx dela chegava até o navegador mas nunca aparecia no log.
         if (status >= 400) {
           const errChunks = [];
           proxyRes.on("data", (d) => errChunks.push(d));
           proxyRes.on("end", () => {
-            const bodyText = Buffer.concat(errChunks).toString("utf-8");
-            console.error(`[proxy] Taskrow ${status} em ${req.method} ${targetPath}: ${bodyText.slice(0, 500)}`);
+            const raw = Buffer.concat(errChunks);
+            const encoding = (proxyRes.headers["content-encoding"] || "").toLowerCase();
+            let decoded;
+            try {
+              decoded = encoding === "gzip" ? zlib.gunzipSync(raw)
+                : encoding === "br" ? zlib.brotliDecompressSync(raw)
+                : encoding === "deflate" ? zlib.inflateSync(raw)
+                : raw;
+            } catch (e) {
+              decoded = raw; // não conseguiu descomprimir — loga cru mesmo assim
+            }
+            const bodyText = decoded.toString("utf-8");
+            console.error(
+              `[proxy] Taskrow ${status} em ${req.method} ${targetPath} ` +
+              `(bytes=${raw.length}, content-type=${proxyRes.headers["content-type"] || "?"}, content-encoding=${encoding || "nenhum"}): ` +
+              (bodyText.trim() ? bodyText.slice(0, 800) : "(corpo vazio)")
+            );
             res.writeHead(status, {
               "content-type": proxyRes.headers["content-type"] || "application/json",
               "access-control-allow-origin": "*",
