@@ -296,7 +296,24 @@ function proxyTaskrow(req, res, rawUrl) {
         headers,
       },
       (proxyRes) => {
-        res.writeHead(proxyRes.statusCode || 200, {
+        const status = proxyRes.statusCode || 200;
+        // Em erro, loga o corpo da resposta da Taskrow (pm2 logs) — sem isso,
+        // um 4xx/5xx dela chegava até o navegador mas nunca aparecia no log.
+        if (status >= 400) {
+          const errChunks = [];
+          proxyRes.on("data", (d) => errChunks.push(d));
+          proxyRes.on("end", () => {
+            const bodyText = Buffer.concat(errChunks).toString("utf-8");
+            console.error(`[proxy] Taskrow ${status} em ${req.method} ${targetPath}: ${bodyText.slice(0, 500)}`);
+            res.writeHead(status, {
+              "content-type": proxyRes.headers["content-type"] || "application/json",
+              "access-control-allow-origin": "*",
+            });
+            res.end(bodyText);
+          });
+          return;
+        }
+        res.writeHead(status, {
           "content-type": proxyRes.headers["content-type"] || "application/json",
           "access-control-allow-origin": "*",
         });
