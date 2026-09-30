@@ -17,7 +17,11 @@ async function taskrowFetch(path: string, options: { method?: string; body?: str
   return fetch(url.toString(), {
     method,
     headers: {
-      "__identifier": apiKey,
+      // Header hifenizado (não "__identifier") entre navegador e nosso próprio
+      // servidor: alguns proxies reversos (nginx/Apache) descartam por padrão
+      // headers HTTP com underscore. O server.cjs remonta como "__identifier"
+      // só na chamada de saída para o Taskrow, que exige esse nome exato.
+      "x-taskrow-key": apiKey,
       "Content-Type": "application/json",
     },
     body: options.body,

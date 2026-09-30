@@ -271,8 +271,10 @@ function serveFile(res, filePath) {
 function proxyTaskrow(req, res, rawUrl) {
   const targetPath = rawUrl.replace(/^\/taskrow-api/, "") || "/";
   // Cada usuário usa a própria chave pessoal do Taskrow — nunca a chave global
-  // do servidor (essa é só para jobs de fundo: analytics/alertas).
-  const apiKey = req.headers["__identifier"] || "";
+  // do servidor (essa é só para jobs de fundo: analytics/alertas). Lê de
+  // x-taskrow-key (hifenizado, sobrevive a proxies reversos que descartam
+  // headers com underscore) — "__identifier" fica só como fallback.
+  const apiKey = req.headers["x-taskrow-key"] || req.headers["__identifier"] || "";
 
   const chunks = [];
   req.on("data", (d) => chunks.push(d));
