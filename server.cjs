@@ -853,7 +853,9 @@ function buildTeamsPayload(area, tasks, usersById, teamsLinks, max = 15) {
     body,
   };
   if (entities.length) card.msteams = { entities };
-  return { type: "message", attachments: [{ contentType: "application/vnd.microsoft.card.adaptive", content: card }] };
+  // contentUrl: null é exigido pelo schema do trigger "Postar em um canal quando uma
+  // solicitação de webhook for recebida" — sem ele o Power Automate acusa "Attachments is null".
+  return { type: "message", attachments: [{ contentType: "application/vnd.microsoft.card.adaptive", contentUrl: null, content: card }] };
 }
 
 /**
