@@ -42,40 +42,16 @@ interface ImportRow {
   dueDate: string; // yyyy-mm-dd, vazio = sem prazo
   clientID: number | undefined;
   jobID: number | undefined;
-  requestTypeID: number | undefined;
   status: "idle" | "pending" | "success" | "error";
   resultMessage?: string;
 }
 
 /**
- * Tipos de solicitação cadastrados na conta Taskrow da CRT — não existe
- * endpoint documentado pra listar isso dinamicamente; lista repassada pelo
- * suporte do Taskrow por e-mail em 2025-10-30. RequestTypeID é exigido pelo
- * Task/SaveTask (sem ele, a chamada falha).
+ * ID do tipo de solicitação usado em toda tarefa criada por aqui — fixo,
+ * confirmado pelo usuário como o que funciona pra essa conta/projetos.
+ * Não existe endpoint documentado pra listar/validar tipos dinamicamente.
  */
-const REQUEST_TYPES: { id: number; label: string }[] = [
-  { id: 11176, label: "Correção Interna" },
-  { id: 11189, label: "Revisão de Texto" },
-  { id: 11190, label: "Criação de Conteúdo" },
-  { id: 11191, label: "Aprovação Cliente" },
-  { id: 11192, label: "Postagem em Rede Social" },
-  { id: 11193, label: "Envio de Briefing" },
-  { id: 11194, label: "Reunião de Alinhamento" },
-  { id: 11195, label: "Produção de Arte" },
-  { id: 11196, label: "Edição de Vídeo" },
-  { id: 11255, label: "Planejamento de Campanha" },
-  { id: 11256, label: "Monitoramento de Métricas" },
-  { id: 11272, label: "Relatório de Performance" },
-  { id: 11273, label: "Criação de Anúncio" },
-  { id: 11274, label: "Configuração de Campanha" },
-  { id: 11334, label: "Aprovação Interna" },
-  { id: 11335, label: "Envio para Cliente" },
-  { id: 11336, label: "Ajustes Finais" },
-  { id: 11337, label: "Publicação" },
-  { id: 11338, label: "Arquivamento" },
-  { id: 11780, label: "Pesquisa de Mercado" },
-  { id: 11801, label: "Brainstorm" },
-];
+const FIXED_REQUEST_TYPE_ID = 12644;
 
 function escapeHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -228,7 +204,6 @@ export default function TaskImportView() {
   const [sameForAll, setSameForAll] = useState(true);
   const [globalClientID, setGlobalClientID] = useState<number | undefined>(undefined);
   const [globalJobID, setGlobalJobID] = useState<number | undefined>(undefined);
-  const [globalRequestTypeID, setGlobalRequestTypeID] = useState<number | undefined>(undefined);
   const [inserting, setInserting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -250,7 +225,6 @@ export default function TaskImportView() {
         dueDate: t.deadline && /^\d{4}-\d{2}-\d{2}/.test(t.deadline) ? t.deadline.slice(0, 10) : "",
         clientID: undefined,
         jobID: undefined,
-        requestTypeID: undefined,
         status: "idle",
       }));
       setRows(newRows);
@@ -277,10 +251,9 @@ export default function TaskImportView() {
     return selected.every((r) => {
       const clientID = sameForAll ? globalClientID : r.clientID;
       const jobID = sameForAll ? globalJobID : r.jobID;
-      const requestTypeID = sameForAll ? globalRequestTypeID : r.requestTypeID;
-      return r.title.trim() && r.ownerUserID && clientID && jobID && requestTypeID;
+      return r.title.trim() && r.ownerUserID && clientID && jobID;
     });
-  }, [rows, sameForAll, globalClientID, globalJobID, globalRequestTypeID]);
+  }, [rows, sameForAll, globalClientID, globalJobID]);
 
   const insertAll = async () => {
     setInserting(true);
@@ -288,8 +261,7 @@ export default function TaskImportView() {
       if (!row.selected) continue;
       const clientID = sameForAll ? globalClientID : row.clientID;
       const jobID = sameForAll ? globalJobID : row.jobID;
-      const requestTypeID = sameForAll ? globalRequestTypeID : row.requestTypeID;
-      if (!row.ownerUserID || !clientID || !jobID || !requestTypeID || !row.title.trim()) {
+      if (!row.ownerUserID || !clientID || !jobID || !row.title.trim()) {
         updateRow(row.id, { status: "error", resultMessage: "Faltam campos obrigatórios" });
         continue;
       }
@@ -299,7 +271,7 @@ export default function TaskImportView() {
           TaskTitle: row.title.trim(),
           JobID: jobID,
           OwnerUserID: row.ownerUserID,
-          RequestTypeID: requestTypeID,
+          RequestTypeID: FIXED_REQUEST_TYPE_ID,
           // TaskItemComment nunca vazio — string vazia já causou um 500 sem
           // corpo de erro por parte da Taskrow; título serve de fallback.
           TaskItemComment: composeBriefing(row) || `<p>${escapeHtml(row.title.trim())}</p>`,
@@ -374,12 +346,12 @@ export default function TaskImportView() {
           <div className="flex-1 overflow-y-auto px-6 py-4">
             <div className="space-y-4">
               <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border p-3">
-                <Label htmlFor="same-for-all">Mesmo cliente, projeto e tipo de solicitação para todas as tarefas</Label>
+                <Label htmlFor="same-for-all">Mesmo cliente e projeto para todas as tarefas</Label>
                 <Switch id="same-for-all" checked={sameForAll} onCheckedChange={setSameForAll} />
               </div>
 
               {sameForAll && (
-                <div className="grid grid-cols-1 gap-3 rounded-md border p-3 sm:grid-cols-3">
+                <div className="grid grid-cols-1 gap-3 rounded-md border p-3 sm:grid-cols-2">
                   <div className="space-y-1.5">
                     <Label>Cliente</Label>
                     <ClientCombobox
@@ -398,20 +370,6 @@ export default function TaskImportView() {
                       <SelectContent>
                         {(globalProjects?.items || []).map((j) => (
                           <SelectItem key={j.jobID} value={String(j.jobID)}>{j.jobTitle}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label>Tipo de solicitação</Label>
-                    <Select
-                      value={globalRequestTypeID ? String(globalRequestTypeID) : ""}
-                      onValueChange={(v) => setGlobalRequestTypeID(Number(v))}
-                    >
-                      <SelectTrigger><SelectValue placeholder="Selecione o tipo" /></SelectTrigger>
-                      <SelectContent>
-                        {REQUEST_TYPES.map((rt) => (
-                          <SelectItem key={rt.id} value={String(rt.id)}>{rt.label}</SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
@@ -534,19 +492,6 @@ function TaskCard({
                 <SelectContent>
                   {(rowProjects?.items || []).map((j) => (
                     <SelectItem key={j.jobID} value={String(j.jobID)}>{j.jobTitle}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          )}
-          {!sameForAll && (
-            <div className="space-y-1">
-              <Label className="text-xs text-muted-foreground">Tipo de solicitação</Label>
-              <Select value={row.requestTypeID ? String(row.requestTypeID) : ""} onValueChange={(v) => onChange({ requestTypeID: Number(v) })}>
-                <SelectTrigger className="h-9"><SelectValue placeholder="Selecione" /></SelectTrigger>
-                <SelectContent>
-                  {REQUEST_TYPES.map((rt) => (
-                    <SelectItem key={rt.id} value={String(rt.id)}>{rt.label}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
