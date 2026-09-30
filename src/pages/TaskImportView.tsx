@@ -735,8 +735,20 @@ function ExistingRefCard({
             <RefreshCw className="h-3 w-3" /> Rebuscar
           </Button>
         </div>
-        <p className="font-medium">{row.title}</p>
-        {t.description && <p className="text-sm text-muted-foreground">{t.description}</p>}
+        <Input value={row.title} onChange={(e) => onChange({ title: e.target.value })} className="font-medium" />
+        <Textarea
+          value={row.description}
+          onChange={(e) => onChange({ description: e.target.value })}
+          className="min-h-16 text-sm"
+          placeholder="Descrição…"
+        />
+        {(t.requested_by || t.notes || t.source?.meeting) && (
+          <p className="text-xs text-muted-foreground">
+            {t.requested_by && <>Solicitado por <b>{t.requested_by}</b>. </>}
+            {t.notes && <>Obs: {t.notes}. </>}
+            {t.source?.meeting && <>Origem: reunião "{t.source.meeting}"{t.source.timestamp ? ` @ ${t.source.timestamp}` : ""}.</>}
+          </p>
+        )}
 
         {row.resolved ? (
           <div className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-muted/50 p-2.5 text-sm">
