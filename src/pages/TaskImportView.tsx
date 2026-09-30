@@ -31,6 +31,12 @@ interface ImportedTask {
   source?: { meeting?: string | null; timestamp?: string | null } | null;
 }
 
+interface JobRef {
+  id: number;
+  number: number;
+  title: string;
+}
+
 interface ImportRow {
   id: string;
   original: ImportedTask;
@@ -41,7 +47,8 @@ interface ImportRow {
   participantIDs: number[];
   dueDate: string; // yyyy-mm-dd, vazio = sem prazo
   clientID: number | undefined;
-  jobID: number | undefined;
+  clientName: string;
+  job: JobRef | undefined;
   status: "idle" | "pending" | "success" | "error";
   resultMessage?: string;
 }
@@ -55,6 +62,19 @@ const FIXED_REQUEST_TYPE_ID = 12644;
 
 function escapeHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function slugify(s: string): string {
+  return (s || "")
+    .normalize("NFD").replace(/[̀-ͯ]/g, "")
+    .replace(/[^a-zA-Z0-9]+/g, "");
+}
+
+/** Código externo único por tarefa criada — cliente+projeto+timestamp, pra rastreio. */
+function generateExternalCode(clientName: string, jobTitle: string): string {
+  const ts = new Date().toISOString().replace(/[-:TZ.]/g, "").slice(0, 14); // YYYYMMDDHHmmss
+  const rand = Math.random().toString(36).slice(2, 6);
+  return `CRT-${slugify(clientName)}-${slugify(jobTitle)}-${ts}-${rand}`;
 }
 
 /** Monta o briefing final (TaskItemComment) a partir da descrição já editada + contexto original. */
@@ -203,7 +223,8 @@ export default function TaskImportView() {
   const [sheetOpen, setSheetOpen] = useState(false);
   const [sameForAll, setSameForAll] = useState(true);
   const [globalClientID, setGlobalClientID] = useState<number | undefined>(undefined);
-  const [globalJobID, setGlobalJobID] = useState<number | undefined>(undefined);
+  const [globalClientName, setGlobalClientName] = useState("");
+  const [globalJob, setGlobalJob] = useState<JobRef | undefined>(undefined);
   const [inserting, setInserting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -224,7 +245,8 @@ export default function TaskImportView() {
         participantIDs: [],
         dueDate: t.deadline && /^\d{4}-\d{2}-\d{2}/.test(t.deadline) ? t.deadline.slice(0, 10) : "",
         clientID: undefined,
-        jobID: undefined,
+        clientName: "",
+        job: undefined,
         status: "idle",
       }));
       setRows(newRows);
@@ -249,19 +271,18 @@ export default function TaskImportView() {
     const selected = rows.filter((r) => r.selected);
     if (selected.length === 0) return false;
     return selected.every((r) => {
-      const clientID = sameForAll ? globalClientID : r.clientID;
-      const jobID = sameForAll ? globalJobID : r.jobID;
-      return r.title.trim() && r.ownerUserID && clientID && jobID;
+      const job = sameForAll ? globalJob : r.job;
+      return r.title.trim() && r.ownerUserID && job;
     });
-  }, [rows, sameForAll, globalClientID, globalJobID]);
+  }, [rows, sameForAll, globalJob]);
 
   const insertAll = async () => {
     setInserting(true);
     for (const row of rows) {
       if (!row.selected) continue;
-      const clientID = sameForAll ? globalClientID : row.clientID;
-      const jobID = sameForAll ? globalJobID : row.jobID;
-      if (!row.ownerUserID || !clientID || !jobID || !row.title.trim()) {
+      const job = sameForAll ? globalJob : row.job;
+      const clientName = sameForAll ? globalClientName : row.clientName;
+      if (!row.ownerUserID || !job || !row.title.trim()) {
         updateRow(row.id, { status: "error", resultMessage: "Faltam campos obrigatórios" });
         continue;
       }
@@ -269,9 +290,11 @@ export default function TaskImportView() {
       try {
         const payload: Record<string, unknown> = {
           TaskTitle: row.title.trim(),
-          JobID: jobID,
+          JobID: job.id,
+          jobNumber: job.number,
           OwnerUserID: row.ownerUserID,
           RequestTypeID: FIXED_REQUEST_TYPE_ID,
+          ExternalCode: generateExternalCode(clientName, job.title),
           // TaskItemComment nunca vazio — string vazia já causou um 500 sem
           // corpo de erro por parte da Taskrow; título serve de fallback.
           TaskItemComment: composeBriefing(row) || `<p>${escapeHtml(row.title.trim())}</p>`,
@@ -356,14 +379,17 @@ export default function TaskImportView() {
                     <Label>Cliente</Label>
                     <ClientCombobox
                       value={globalClientID}
-                      onChange={(id) => { setGlobalClientID(id); setGlobalJobID(undefined); }}
+                      onChange={(id, name) => { setGlobalClientID(id); setGlobalClientName(name); setGlobalJob(undefined); }}
                     />
                   </div>
                   <div className="space-y-1.5">
                     <Label>Projeto</Label>
                     <Select
-                      value={globalJobID ? String(globalJobID) : ""}
-                      onValueChange={(v) => setGlobalJobID(Number(v))}
+                      value={globalJob ? String(globalJob.id) : ""}
+                      onValueChange={(v) => {
+                        const j = globalProjects?.items.find((p) => String(p.jobID) === v);
+                        if (j) setGlobalJob({ id: j.jobID, number: j.jobNumber, title: j.jobTitle });
+                      }}
                       disabled={!globalClientID}
                     >
                       <SelectTrigger><SelectValue placeholder={loadingGlobalProjects ? "Carregando…" : "Selecione o projeto"} /></SelectTrigger>
@@ -479,7 +505,7 @@ function TaskCard({
               <Label className="text-xs text-muted-foreground">Cliente</Label>
               <ClientCombobox
                 value={row.clientID}
-                onChange={(id) => onChange({ clientID: id, jobID: undefined })}
+                onChange={(id, name) => onChange({ clientID: id, clientName: name, job: undefined })}
                 placeholder="Cliente"
               />
             </div>
@@ -487,7 +513,14 @@ function TaskCard({
           {!sameForAll && (
             <div className="space-y-1">
               <Label className="text-xs text-muted-foreground">Projeto</Label>
-              <Select value={row.jobID ? String(row.jobID) : ""} onValueChange={(v) => onChange({ jobID: Number(v) })} disabled={!row.clientID}>
+              <Select
+                value={row.job ? String(row.job.id) : ""}
+                onValueChange={(v) => {
+                  const j = rowProjects?.items.find((p) => String(p.jobID) === v);
+                  if (j) onChange({ job: { id: j.jobID, number: j.jobNumber, title: j.jobTitle } });
+                }}
+                disabled={!row.clientID}
+              >
                 <SelectTrigger className="h-9"><SelectValue placeholder={loadingRowProjects ? "…" : "Projeto"} /></SelectTrigger>
                 <SelectContent>
                   {(rowProjects?.items || []).map((j) => (
