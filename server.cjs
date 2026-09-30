@@ -783,10 +783,18 @@ const fmtDate = (s) => {
   return isNaN(d) ? "" : `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}`;
 };
 
-function taskLine(t) {
+/** Mesmo padrão de link usado no frontend (src/lib/taskrowLink.ts). */
+function taskrowLink(t) {
+  return `https://crtcomunicacao.taskrow.com/#home/tasks/${t.clientNickName}/${t.jobNumber}/${t.taskNumber}`;
+}
+
+/** `markdown: true` gera um link clicável — usado no cartão do Teams (suporta Markdown). */
+function taskLine(t, { markdown = false } = {}) {
   const title = t.taskTitle || `#${t.taskNumber}`;
   const due = fmtDate(t.dueDate);
-  return `• ${title}${due ? ` (venceu ${due})` : ""}${t.clientNickName ? ` — ${t.clientNickName}` : ""}`;
+  const code = `#${t.taskNumber}`;
+  const label = markdown ? `[${code} — ${title}](${taskrowLink(t)})` : `${code} — ${title} (${taskrowLink(t)})`;
+  return `• ${label}${due ? ` (venceu ${due})` : ""}${t.clientNickName ? ` — ${t.clientNickName}` : ""}`;
 }
 
 /** Agrupa tarefas por dono (ownerUserID), preservando a ordem original. */
@@ -841,7 +849,7 @@ function buildTeamsPayload(area, tasks, usersById, teamsLinks, max = 15) {
     const remaining = max - shown;
     const lines = ownerTasks.slice(0, remaining);
     shown += lines.length;
-    lines.forEach((t) => body.push({ type: "TextBlock", wrap: true, spacing: "Small", text: taskLine(t) }));
+    lines.forEach((t) => body.push({ type: "TextBlock", wrap: true, spacing: "Small", text: taskLine(t, { markdown: true }) }));
   }
   if (tasks.length > shown) body.push({ type: "TextBlock", isSubtle: true, wrap: true, text: `…e mais ${tasks.length - shown}` });
   body.push({ type: "TextBlock", isSubtle: true, wrap: true, spacing: "Medium", text: "Acesse o painel CRT para resolver." });

@@ -6,17 +6,19 @@ import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { toast } from "@/hooks/use-toast";
 import { useUsers } from "@/hooks/useUsers";
 import { useClients } from "@/hooks/useClients";
 import { useProjects } from "@/hooks/useProjects";
 import { apiPost } from "@/lib/api";
+import type { TaskrowUser } from "@/types/taskrow";
 
 interface ImportedTask {
   title: string;
@@ -32,12 +34,14 @@ interface ImportedTask {
 interface ImportRow {
   id: string;
   original: ImportedTask;
+  selected: boolean;
   title: string;
+  description: string;
   ownerUserID: number | undefined;
+  participantIDs: number[];
   dueDate: string; // yyyy-mm-dd, vazio = sem prazo
   clientID: number | undefined;
   jobID: number | undefined;
-  briefing: string;
   status: "idle" | "pending" | "success" | "error";
   resultMessage?: string;
 }
@@ -46,9 +50,11 @@ function escapeHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-function composeBriefing(t: ImportedTask): string {
+/** Monta o briefing final (TaskItemComment) a partir da descrição já editada + contexto original. */
+function composeBriefing(row: ImportRow): string {
+  const t = row.original;
   const parts: string[] = [];
-  if (t.description) parts.push(`<p>${escapeHtml(t.description)}</p>`);
+  if (row.description.trim()) parts.push(`<p>${escapeHtml(row.description.trim())}</p>`);
   if (t.requested_by) parts.push(`<p><b>Solicitado por:</b> ${escapeHtml(t.requested_by)}</p>`);
   if (t.notes) parts.push(`<p><b>Obs:</b> ${escapeHtml(t.notes)}</p>`);
   if (t.priority) parts.push(`<p><b>Prioridade:</b> ${escapeHtml(String(t.priority))}</p>`);
@@ -101,7 +107,7 @@ function ClientCombobox({
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <Button variant="outline" role="combobox" aria-expanded={open}
-          className="h-8 w-full justify-between font-normal">
+          className="h-9 w-full justify-between font-normal">
           <span className="truncate">{value ? selectedLabel || `Cliente #${value}` : placeholder}</span>
           <ChevronsUpDown className="ml-2 h-3.5 w-3.5 shrink-0 opacity-50" />
         </Button>
@@ -134,6 +140,55 @@ function ClientCombobox({
   );
 }
 
+/** Multi-seleção de participantes (MemberListString), além do responsável. */
+function ParticipantsMultiSelect({
+  value, onChange, users, loadingUsers,
+}: {
+  value: number[];
+  onChange: (ids: number[]) => void;
+  users: TaskrowUser[] | undefined;
+  loadingUsers: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const selectedUsers = (users || []).filter((u) => value.includes(u.UserID));
+
+  const toggle = (id: number) => {
+    onChange(value.includes(id) ? value.filter((v) => v !== id) : [...value, id]);
+  };
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button variant="outline" role="combobox" aria-expanded={open}
+          className="h-9 w-full justify-between font-normal">
+          <span className="truncate">
+            {selectedUsers.length
+              ? selectedUsers.map((u) => u.FullName.split(" ")[0]).join(", ")
+              : (loadingUsers ? "…" : "Participantes (opcional)")}
+          </span>
+          <ChevronsUpDown className="ml-2 h-3.5 w-3.5 shrink-0 opacity-50" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-72 p-0" align="start">
+        <Command>
+          <CommandInput placeholder="Buscar pessoa…" />
+          <CommandList>
+            <CommandEmpty>Ninguém encontrado.</CommandEmpty>
+            <CommandGroup>
+              {(users || []).filter((u) => !u.Inactive).map((u) => (
+                <CommandItem key={u.UserID} value={u.FullName} onSelect={() => toggle(u.UserID)}>
+                  <Checkbox checked={value.includes(u.UserID)} className="mr-2" />
+                  {u.FullName}
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 export default function TaskImportView() {
   const [raw, setRaw] = useState("");
   const [parseError, setParseError] = useState("");
@@ -155,12 +210,14 @@ export default function TaskImportView() {
       const newRows: ImportRow[] = tasks.map((t, i) => ({
         id: `${Date.now()}-${i}`,
         original: t,
+        selected: true,
         title: t.title.trim(),
+        description: t.description || "",
         ownerUserID: undefined,
+        participantIDs: [],
         dueDate: t.deadline && /^\d{4}-\d{2}-\d{2}/.test(t.deadline) ? t.deadline.slice(0, 10) : "",
         clientID: undefined,
         jobID: undefined,
-        briefing: composeBriefing(t),
         status: "idle",
       }));
       setRows(newRows);
@@ -179,9 +236,12 @@ export default function TaskImportView() {
   const updateRow = (id: string, patch: Partial<ImportRow>) =>
     setRows((prev) => prev.map((r) => (r.id === id ? { ...r, ...patch } : r)));
 
+  const selectedCount = rows.filter((r) => r.selected).length;
+
   const canInsert = useMemo(() => {
-    if (rows.length === 0) return false;
-    return rows.every((r) => {
+    const selected = rows.filter((r) => r.selected);
+    if (selected.length === 0) return false;
+    return selected.every((r) => {
       const clientID = sameForAll ? globalClientID : r.clientID;
       const jobID = sameForAll ? globalJobID : r.jobID;
       return r.title.trim() && r.ownerUserID && clientID && jobID;
@@ -191,6 +251,7 @@ export default function TaskImportView() {
   const insertAll = async () => {
     setInserting(true);
     for (const row of rows) {
+      if (!row.selected) continue;
       const clientID = sameForAll ? globalClientID : row.clientID;
       const jobID = sameForAll ? globalJobID : row.jobID;
       if (!row.ownerUserID || !clientID || !jobID || !row.title.trim()) {
@@ -199,11 +260,13 @@ export default function TaskImportView() {
       }
       updateRow(row.id, { status: "pending" });
       try {
+        const memberIDs = Array.from(new Set([row.ownerUserID, ...row.participantIDs]));
         const payload: Record<string, unknown> = {
           TaskTitle: row.title.trim(),
           JobID: jobID,
           OwnerUserID: row.ownerUserID,
-          TaskItemComment: row.briefing,
+          MemberListString: memberIDs.join(","),
+          TaskItemComment: composeBriefing(row),
         };
         if (row.dueDate) payload.DueDate = `${row.dueDate}T00:00:00`;
         const res = await apiPost<{ Success: boolean; Message?: string; Entity?: { TaskID: number; TaskNumber: number } }>(
@@ -220,8 +283,7 @@ export default function TaskImportView() {
       }
     }
     setInserting(false);
-    const successCount = rows.filter((r) => r.status === "success").length;
-    toast({ title: "Importação concluída", description: `Veja o status por linha no painel.` });
+    toast({ title: "Importação concluída", description: "Veja o status em cada tarefa no painel." });
   };
 
   return (
@@ -260,60 +322,54 @@ export default function TaskImportView() {
       </Card>
 
       <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
-        <SheetContent className="w-full overflow-y-auto sm:max-w-4xl">
-          <SheetHeader>
-            <SheetTitle>{rows.length} tarefa(s) mapeada(s)</SheetTitle>
-            <SheetDescription>Revise responsável, prazo, cliente e projeto antes de inserir no Taskrow.</SheetDescription>
+        <SheetContent className="flex w-full flex-col gap-0 p-0 sm:max-w-[1100px]">
+          <SheetHeader className="border-b px-6 py-4">
+            <SheetTitle>{selectedCount} de {rows.length} tarefa(s) selecionada(s) para importar</SheetTitle>
+            <SheetDescription>Marque o que entra, edite título/descrição, e defina responsável, participantes, prazo, cliente e projeto.</SheetDescription>
           </SheetHeader>
 
-          <div className="mt-4 space-y-4">
-            <div className="flex items-center justify-between rounded-md border p-3">
-              <Label htmlFor="same-for-all">Mesmo cliente e projeto para todas as tarefas</Label>
-              <Switch id="same-for-all" checked={sameForAll} onCheckedChange={setSameForAll} />
-            </div>
-
-            {sameForAll && (
-              <div className="grid grid-cols-1 gap-3 rounded-md border p-3 sm:grid-cols-2">
-                <div className="space-y-1.5">
-                  <Label>Cliente</Label>
-                  <ClientCombobox
-                    value={globalClientID}
-                    onChange={(id) => { setGlobalClientID(id); setGlobalJobID(undefined); }}
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label>Projeto</Label>
-                  <Select
-                    value={globalJobID ? String(globalJobID) : ""}
-                    onValueChange={(v) => setGlobalJobID(Number(v))}
-                    disabled={!globalClientID}
-                  >
-                    <SelectTrigger><SelectValue placeholder={loadingGlobalProjects ? "Carregando…" : "Selecione o projeto"} /></SelectTrigger>
-                    <SelectContent>
-                      {(globalProjects?.items || []).map((j) => (
-                        <SelectItem key={j.jobID} value={String(j.jobID)}>{j.jobTitle}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
+          <div className="flex-1 overflow-y-auto px-6 py-4">
+            <div className="space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border p-3">
+                <Label htmlFor="same-for-all">Mesmo cliente e projeto para todas as tarefas</Label>
+                <Switch id="same-for-all" checked={sameForAll} onCheckedChange={setSameForAll} />
               </div>
-            )}
 
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="w-8"></TableHead>
-                  <TableHead>Título</TableHead>
-                  <TableHead>Responsável</TableHead>
-                  <TableHead>Prazo</TableHead>
-                  {!sameForAll && <TableHead>Cliente</TableHead>}
-                  {!sameForAll && <TableHead>Projeto</TableHead>}
-                  <TableHead>Status</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
+              {sameForAll && (
+                <div className="grid grid-cols-1 gap-3 rounded-md border p-3 sm:grid-cols-2">
+                  <div className="space-y-1.5">
+                    <Label>Cliente</Label>
+                    <ClientCombobox
+                      value={globalClientID}
+                      onChange={(id) => { setGlobalClientID(id); setGlobalJobID(undefined); }}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label>Projeto</Label>
+                    <Select
+                      value={globalJobID ? String(globalJobID) : ""}
+                      onValueChange={(v) => setGlobalJobID(Number(v))}
+                      disabled={!globalClientID}
+                    >
+                      <SelectTrigger><SelectValue placeholder={loadingGlobalProjects ? "Carregando…" : "Selecione o projeto"} /></SelectTrigger>
+                      <SelectContent>
+                        {(globalProjects?.items || []).map((j) => (
+                          <SelectItem key={j.jobID} value={String(j.jobID)}>{j.jobTitle}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+              )}
+
+              <div className="flex items-center gap-2">
+                <Button variant="ghost" size="sm" onClick={() => setRows((prev) => prev.map((r) => ({ ...r, selected: true })))}>Marcar todas</Button>
+                <Button variant="ghost" size="sm" onClick={() => setRows((prev) => prev.map((r) => ({ ...r, selected: false })))}>Desmarcar todas</Button>
+              </div>
+
+              <div className="space-y-3">
                 {rows.map((row) => (
-                  <ImportRowView
+                  <TaskCard
                     key={row.id}
                     row={row}
                     users={users}
@@ -322,14 +378,14 @@ export default function TaskImportView() {
                     onChange={(patch) => updateRow(row.id, patch)}
                   />
                 ))}
-              </TableBody>
-            </Table>
-
-            <div className="flex items-center justify-end gap-2 pb-4">
-              <Button onClick={insertAll} disabled={!canInsert || inserting} className="gap-2">
-                {inserting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />} Inserir no Taskrow
-              </Button>
+              </div>
             </div>
+          </div>
+
+          <div className="flex items-center justify-end gap-2 border-t px-6 py-4">
+            <Button onClick={insertAll} disabled={!canInsert || inserting} className="gap-2">
+              {inserting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />} Inserir {selectedCount} tarefa(s) no Taskrow
+            </Button>
           </div>
         </SheetContent>
       </Sheet>
@@ -337,11 +393,18 @@ export default function TaskImportView() {
   );
 }
 
-function ImportRowView({
+function StatusIcon({ status }: { status: ImportRow["status"] }) {
+  if (status === "success") return <CheckCircle2 className="h-4 w-4 text-emerald-600" />;
+  if (status === "error") return <XCircle className="h-4 w-4 text-destructive" />;
+  if (status === "pending") return <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />;
+  return <Circle className="h-3 w-3 text-muted-foreground" />;
+}
+
+function TaskCard({
   row, users, loadingUsers, sameForAll, onChange,
 }: {
   row: ImportRow;
-  users: ReturnType<typeof useUsers>["data"];
+  users: TaskrowUser[] | undefined;
   loadingUsers: boolean;
   sameForAll: boolean;
   onChange: (patch: Partial<ImportRow>) => void;
@@ -349,53 +412,99 @@ function ImportRowView({
   const { data: rowProjects, isLoading: loadingRowProjects } = useProjects(sameForAll ? undefined : row.clientID);
 
   return (
-    <TableRow>
-      <TableCell>
-        {row.status === "success" && <CheckCircle2 className="h-4 w-4 text-emerald-600" />}
-        {row.status === "error" && <XCircle className="h-4 w-4 text-destructive" />}
-        {row.status === "pending" && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
-        {row.status === "idle" && <Circle className="h-3 w-3 text-muted-foreground" />}
-      </TableCell>
-      <TableCell className="min-w-52">
-        <Input value={row.title} onChange={(e) => onChange({ title: e.target.value })} className="h-8" />
-      </TableCell>
-      <TableCell className="min-w-44">
-        <Select value={row.ownerUserID ? String(row.ownerUserID) : ""} onValueChange={(v) => onChange({ ownerUserID: Number(v) })}>
-          <SelectTrigger className="h-8"><SelectValue placeholder={loadingUsers ? "…" : "Responsável"} /></SelectTrigger>
-          <SelectContent>
-            {(users || []).filter((u) => !u.Inactive).map((u) => (
-              <SelectItem key={u.UserID} value={String(u.UserID)}>{u.FullName}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </TableCell>
-      <TableCell className="min-w-36">
-        <Input type="date" value={row.dueDate} onChange={(e) => onChange({ dueDate: e.target.value })} className="h-8" />
-      </TableCell>
-      {!sameForAll && (
-        <TableCell className="min-w-40">
-          <ClientCombobox
-            value={row.clientID}
-            onChange={(id) => onChange({ clientID: id, jobID: undefined })}
-            placeholder="Cliente"
+    <Card className={row.selected ? "" : "opacity-60"}>
+      <CardContent className="space-y-3 p-4">
+        <div className="flex items-start gap-3">
+          <Checkbox
+            checked={row.selected}
+            onCheckedChange={(v) => onChange({ selected: !!v })}
+            className="mt-2.5"
           />
-        </TableCell>
-      )}
-      {!sameForAll && (
-        <TableCell className="min-w-40">
-          <Select value={row.jobID ? String(row.jobID) : ""} onValueChange={(v) => onChange({ jobID: Number(v) })} disabled={!row.clientID}>
-            <SelectTrigger className="h-8"><SelectValue placeholder={loadingRowProjects ? "…" : "Projeto"} /></SelectTrigger>
-            <SelectContent>
-              {(rowProjects?.items || []).map((j) => (
-                <SelectItem key={j.jobID} value={String(j.jobID)}>{j.jobTitle}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </TableCell>
-      )}
-      <TableCell className="max-w-48 truncate text-xs text-muted-foreground" title={row.resultMessage}>
-        {row.resultMessage || ""}
-      </TableCell>
-    </TableRow>
+          <div className="flex-1 space-y-1">
+            <Label className="text-xs text-muted-foreground">Título</Label>
+            <Input value={row.title} onChange={(e) => onChange({ title: e.target.value })} className="font-medium" />
+          </div>
+          <div className="mt-2.5 flex items-center gap-2">
+            <StatusIcon status={row.status} />
+            {row.resultMessage && (
+              <span className={`max-w-40 truncate text-xs ${row.status === "error" ? "text-destructive" : "text-muted-foreground"}`} title={row.resultMessage}>
+                {row.resultMessage}
+              </span>
+            )}
+          </div>
+        </div>
+
+        <div className={`grid grid-cols-1 gap-3 sm:grid-cols-2 ${!sameForAll ? "lg:grid-cols-4" : "lg:grid-cols-3"}`}>
+          <div className="space-y-1">
+            <Label className="text-xs text-muted-foreground">Responsável</Label>
+            <Select value={row.ownerUserID ? String(row.ownerUserID) : ""} onValueChange={(v) => onChange({ ownerUserID: Number(v) })}>
+              <SelectTrigger className="h-9"><SelectValue placeholder={loadingUsers ? "…" : "Selecione"} /></SelectTrigger>
+              <SelectContent>
+                {(users || []).filter((u) => !u.Inactive).map((u) => (
+                  <SelectItem key={u.UserID} value={String(u.UserID)}>{u.FullName}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs text-muted-foreground">Participantes</Label>
+            <ParticipantsMultiSelect
+              value={row.participantIDs}
+              onChange={(ids) => onChange({ participantIDs: ids })}
+              users={users}
+              loadingUsers={loadingUsers}
+            />
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs text-muted-foreground">Prazo</Label>
+            <Input type="date" value={row.dueDate} onChange={(e) => onChange({ dueDate: e.target.value })} className="h-9" />
+          </div>
+          {!sameForAll && (
+            <div className="space-y-1">
+              <Label className="text-xs text-muted-foreground">Cliente</Label>
+              <ClientCombobox
+                value={row.clientID}
+                onChange={(id) => onChange({ clientID: id, jobID: undefined })}
+                placeholder="Cliente"
+              />
+            </div>
+          )}
+          {!sameForAll && (
+            <div className="space-y-1">
+              <Label className="text-xs text-muted-foreground">Projeto</Label>
+              <Select value={row.jobID ? String(row.jobID) : ""} onValueChange={(v) => onChange({ jobID: Number(v) })} disabled={!row.clientID}>
+                <SelectTrigger className="h-9"><SelectValue placeholder={loadingRowProjects ? "…" : "Projeto"} /></SelectTrigger>
+                <SelectContent>
+                  {(rowProjects?.items || []).map((j) => (
+                    <SelectItem key={j.jobID} value={String(j.jobID)}>{j.jobTitle}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+        </div>
+
+        <div className="space-y-1">
+          <div className="flex items-center justify-between">
+            <Label className="text-xs text-muted-foreground">Descrição</Label>
+            {row.original.priority && <Badge variant="outline" className="text-xs">Prioridade: {row.original.priority}</Badge>}
+          </div>
+          <Textarea
+            value={row.description}
+            onChange={(e) => onChange({ description: e.target.value })}
+            className="min-h-20 text-sm"
+            placeholder="Descrição da tarefa…"
+          />
+          {(row.original.requested_by || row.original.notes || row.original.source?.meeting) && (
+            <p className="text-xs text-muted-foreground">
+              {row.original.requested_by && <>Solicitado por <b>{row.original.requested_by}</b>. </>}
+              {row.original.notes && <>Obs: {row.original.notes}. </>}
+              {row.original.source?.meeting && <>Origem: reunião "{row.original.source.meeting}"{row.original.source.timestamp ? ` @ ${row.original.source.timestamp}` : ""}.</>}
+              {" "}(vai junto no briefing automaticamente)
+            </p>
+          )}
+        </div>
+      </CardContent>
+    </Card>
   );
 }
