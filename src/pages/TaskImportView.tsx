@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { FileJson, Upload, Loader2, CheckCircle2, XCircle, Circle, Send, ChevronsUpDown, ExternalLink, Link2Off } from "lucide-react";
+import { FileJson, Upload, Loader2, CheckCircle2, XCircle, Circle, Send, ChevronsUpDown, ExternalLink, Link2Off, RefreshCw } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -22,7 +22,7 @@ import { taskrowLink } from "@/lib/taskrowLink";
 import type { TaskrowTask, TaskrowUser } from "@/types/taskrow";
 
 /** action: presente no formato v1.1 (schema "actions") — ausente no v1.0 (schema "tasks", sempre nova tarefa). */
-type ImportAction = "create_task" | "update_task" | "create_subtask" | "needs_classification" | null | undefined;
+type ImportAction = "create_task" | "update_task" | "create_subtask" | "needs_classification";
 
 interface ImportedTask {
   title: string;
@@ -33,22 +33,27 @@ interface ImportedTask {
   status?: string | null;
   notes?: string | null;
   source?: { meeting?: string | null; timestamp?: string | null } | null;
-  action?: ImportAction;
+  action?: ImportAction | null;
   target_task_code?: string | null;
   classification?: string | null;
 }
 
-const ACTION_LABELS: Record<string, { label: string; cls: string }> = {
+const ACTION_LABELS: Record<ImportAction, { label: string; cls: string }> = {
   create_task: { label: "Nova tarefa", cls: "bg-emerald-100 text-emerald-700" },
   update_task: { label: "Atualizar tarefa existente", cls: "bg-amber-100 text-amber-700" },
   create_subtask: { label: "Nova subtarefa", cls: "bg-indigo-100 text-indigo-700" },
   needs_classification: { label: "Precisa classificação", cls: "bg-muted text-muted-foreground" },
 };
 
-/** Só tarefa genuinamente nova (ou formato antigo, sem "action") deve criar por padrão — o
- *  resto aponta pra uma tarefa já existente (target_task_code) e criar do zero duplicaria. */
-function isSafeToCreateByDefault(action: ImportAction): boolean {
-  return !action || action === "create_task";
+/** Classificação inicial: respeita o que veio no JSON; sem "action" (formato v1.0) = sempre nova tarefa. */
+function defaultAction(t: ImportedTask): ImportAction {
+  if (t.action === "update_task" || t.action === "create_subtask" || t.action === "needs_classification") return t.action;
+  return "create_task";
+}
+
+/** Tarefa relacionada a uma já existente — vai pro bloco separado, nunca cria do zero. */
+function isExistingRef(action: ImportAction): boolean {
+  return action === "update_task" || action === "create_subtask";
 }
 
 interface JobRef {
@@ -60,6 +65,7 @@ interface JobRef {
 interface ImportRow {
   id: string;
   original: ImportedTask;
+  action: ImportAction; // editável — reclassificar move o card entre os dois blocos
   selected: boolean;
   title: string;
   description: string;
@@ -69,16 +75,10 @@ interface ImportRow {
   clientID: number | undefined;
   clientName: string;
   job: JobRef | undefined;
+  targetTaskCode: string; // editável — só relevante quando action é update_task/create_subtask
+  resolved: TaskrowTask | null;
   status: "idle" | "pending" | "success" | "error";
   resultMessage?: string;
-}
-
-/** Item que se refere a uma tarefa já existente (update_task/create_subtask) — cliente/projeto
- *  resolvidos automaticamente a partir do cache local de tarefas, pelo número referenciado. */
-interface ExistingRefRow {
-  id: string;
-  original: ImportedTask;
-  resolved: TaskrowTask | null; // null = ainda não resolvido ou não encontrado no cache local
 }
 
 /**
@@ -136,6 +136,24 @@ function parseImportJson(raw: string): ImportedTask[] {
     throw new Error('Nenhuma tarefa com "title" válido encontrada.');
   }
   return withTitle;
+}
+
+/** Select compacto, colorido conforme o tipo — deixa reclassificar cada item. */
+function ActionSelect({ value, onChange }: { value: ImportAction; onChange: (v: ImportAction) => void }) {
+  const info = ACTION_LABELS[value];
+  return (
+    <Select value={value} onValueChange={(v) => onChange(v as ImportAction)}>
+      <SelectTrigger className={`h-6 w-auto gap-1 rounded-full border-none px-2.5 py-0 text-[11px] font-medium shadow-none focus:ring-0 focus:ring-offset-0 ${info.cls}`}>
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value="create_task">Nova tarefa</SelectItem>
+        <SelectItem value="update_task">Atualizar tarefa existente</SelectItem>
+        <SelectItem value="create_subtask">Nova subtarefa</SelectItem>
+        {value === "needs_classification" && <SelectItem value="needs_classification">Precisa classificação</SelectItem>}
+      </SelectContent>
+    </Select>
+  );
 }
 
 /** Combobox com busca (debounced) — a API só devolve uma amostra pequena sem termo. */
@@ -248,7 +266,6 @@ export default function TaskImportView() {
   const [raw, setRaw] = useState("");
   const [parseError, setParseError] = useState("");
   const [rows, setRows] = useState<ImportRow[]>([]);
-  const [existingRows, setExistingRows] = useState<ExistingRefRow[]>([]);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [sameForAll, setSameForAll] = useState(true);
   const [globalClientID, setGlobalClientID] = useState<number | undefined>(undefined);
@@ -256,6 +273,7 @@ export default function TaskImportView() {
   const [globalJob, setGlobalJob] = useState<JobRef | undefined>(undefined);
   const [inserting, setInserting] = useState(false);
   const [existingClientID, setExistingClientID] = useState<number | undefined>(undefined);
+  const [existingTasksByNumber, setExistingTasksByNumber] = useState<Map<string, TaskrowTask> | null>(null);
   const [resolvingExisting, setResolvingExisting] = useState(false);
   const [hasSearchedExisting, setHasSearchedExisting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -263,10 +281,16 @@ export default function TaskImportView() {
   const { data: users, isLoading: loadingUsers } = useUsers();
   const { data: globalProjects, isLoading: loadingGlobalProjects } = useProjects(globalClientID);
 
+  const updateRow = (id: string, patch: Partial<ImportRow>) =>
+    setRows((prev) => prev.map((r) => (r.id === id ? { ...r, ...patch } : r)));
+
+  const creatableRows = rows.filter((r) => !isExistingRef(r.action));
+  const existingRefRows = rows.filter((r) => isExistingRef(r.action));
+
   /**
-   * Busca ao vivo na Taskrow (não no cache local) as tarefas do cliente
-   * escolhido e casa cada item pelo número referenciado — pedir o cliente
-   * antes de buscar evita varrer a conta inteira e usa dado sempre atual.
+   * Busca ao vivo na Taskrow (não em cache) as tarefas do cliente escolhido e
+   * casa cada item pelo número referenciado — pedir o cliente antes de
+   * buscar evita varrer a conta inteira e usa dado sempre atual.
    */
   const searchExistingRefs = async () => {
     if (!existingClientID) return;
@@ -274,10 +298,12 @@ export default function TaskImportView() {
     try {
       const tasks = await fetchAllTasks({ ClientID: existingClientID, Closed: null });
       const byNumber = new Map(tasks.map((t) => [String(t.taskNumber), t]));
-      setExistingRows((prev) => prev.map((r) => ({
-        ...r,
-        resolved: (r.original.target_task_code && byNumber.get(r.original.target_task_code)) || null,
-      })));
+      setExistingTasksByNumber(byNumber);
+      setRows((prev) => prev.map((r) => (
+        isExistingRef(r.action)
+          ? { ...r, resolved: (r.targetTaskCode.trim() && byNumber.get(r.targetTaskCode.trim())) || null }
+          : r
+      )));
       setHasSearchedExisting(true);
     } catch (e: any) {
       toast({ title: "Erro ao buscar tarefas na Taskrow", description: e.message, variant: "destructive" });
@@ -286,39 +312,42 @@ export default function TaskImportView() {
     }
   };
 
+  /** Rebusca só uma linha (sem nova chamada à API) — útil depois de corrigir um número errado. */
+  const rematchRow = (id: string) => {
+    setRows((prev) => prev.map((r) => (
+      r.id === id
+        ? { ...r, resolved: (existingTasksByNumber && r.targetTaskCode.trim() && existingTasksByNumber.get(r.targetTaskCode.trim())) || null }
+        : r
+    )));
+  };
+
   const process = () => {
     setParseError("");
     try {
       const tasks = parseImportJson(raw);
-      // update_task/create_subtask apontam pra uma tarefa já existente
-      // (target_task_code) — vão pra um bloco separado, sem passar pelo
-      // fluxo de "criar tarefa nova".
-      const mainTasks = tasks.filter((t) => !t.target_task_code);
-      const refTasks = tasks.filter((t) => t.target_task_code);
-
-      const newRows: ImportRow[] = mainTasks.map((t, i) => ({
-        id: `${Date.now()}-${i}`,
-        original: t,
-        selected: isSafeToCreateByDefault(t.action),
-        title: t.title.trim(),
-        description: t.description || "",
-        ownerUserID: undefined,
-        participantIDs: [],
-        dueDate: t.deadline && /^\d{4}-\d{2}-\d{2}/.test(t.deadline) ? t.deadline.slice(0, 10) : "",
-        clientID: undefined,
-        clientName: "",
-        job: undefined,
-        status: "idle",
-      }));
+      const newRows: ImportRow[] = tasks.map((t, i) => {
+        const action = defaultAction(t);
+        return {
+          id: `${Date.now()}-${i}`,
+          original: t,
+          action,
+          selected: action === "create_task",
+          title: t.title.trim(),
+          description: t.description || "",
+          ownerUserID: undefined,
+          participantIDs: [],
+          dueDate: t.deadline && /^\d{4}-\d{2}-\d{2}/.test(t.deadline) ? t.deadline.slice(0, 10) : "",
+          clientID: undefined,
+          clientName: "",
+          job: undefined,
+          targetTaskCode: t.target_task_code || "",
+          resolved: null,
+          status: "idle",
+        };
+      });
       setRows(newRows);
-
-      const newExistingRows: ExistingRefRow[] = refTasks.map((t, i) => ({
-        id: `ref-${Date.now()}-${i}`,
-        original: t,
-        resolved: null,
-      }));
-      setExistingRows(newExistingRows);
       setExistingClientID(undefined);
+      setExistingTasksByNumber(null);
       setHasSearchedExisting(false);
 
       setSheetOpen(true);
@@ -333,24 +362,21 @@ export default function TaskImportView() {
     reader.readAsText(file);
   };
 
-  const updateRow = (id: string, patch: Partial<ImportRow>) =>
-    setRows((prev) => prev.map((r) => (r.id === id ? { ...r, ...patch } : r)));
-
-  const selectedCount = rows.filter((r) => r.selected).length;
+  const selectedCount = creatableRows.filter((r) => r.selected).length;
 
   const canInsert = useMemo(() => {
-    const selected = rows.filter((r) => r.selected);
+    const selected = creatableRows.filter((r) => r.selected);
     if (selected.length === 0) return false;
     return selected.every((r) => {
       const job = sameForAll ? globalJob : r.job;
       return r.title.trim() && r.ownerUserID && job;
     });
-  }, [rows, sameForAll, globalJob]);
+  }, [creatableRows, sameForAll, globalJob]);
 
   const insertAll = async () => {
     setInserting(true);
     for (const row of rows) {
-      if (!row.selected) continue;
+      if (isExistingRef(row.action) || !row.selected) continue;
       const job = sameForAll ? globalJob : row.job;
       const clientName = sameForAll ? globalClientName : row.clientName;
       if (!row.ownerUserID || !job || !row.title.trim()) {
@@ -433,8 +459,14 @@ export default function TaskImportView() {
       <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
         <SheetContent className="flex w-full flex-col gap-0 p-0 sm:max-w-[1100px]">
           <SheetHeader className="border-b px-6 py-4">
-            <SheetTitle>{selectedCount} de {rows.length} nova(s) tarefa(s) selecionada(s){existingRows.length > 0 ? ` · ${existingRows.length} relacionada(s) a tarefas existentes` : ""}</SheetTitle>
-            <SheetDescription>Marque o que entra, edite título/descrição, e defina responsável, participantes, prazo, cliente e projeto.</SheetDescription>
+            <SheetTitle>
+              {selectedCount} de {creatableRows.length} nova(s) tarefa(s) selecionada(s)
+              {existingRefRows.length > 0 ? ` · ${existingRefRows.length} relacionada(s) a tarefas existentes` : ""}
+            </SheetTitle>
+            <SheetDescription>
+              Reclassifique com o rótulo colorido em cada card, marque o que entra, edite título/descrição, e defina
+              responsável, participantes, prazo, cliente e projeto.
+            </SheetDescription>
           </SheetHeader>
 
           <div className="flex-1 overflow-y-auto px-6 py-4">
@@ -475,15 +507,15 @@ export default function TaskImportView() {
               )}
 
               <div className="flex flex-wrap items-center gap-2">
-                <Button variant="ghost" size="sm" onClick={() => setRows((prev) => prev.map((r) => ({ ...r, selected: true })))}>Marcar todas</Button>
-                <Button variant="ghost" size="sm" onClick={() => setRows((prev) => prev.map((r) => ({ ...r, selected: false })))}>Desmarcar todas</Button>
+                <Button variant="ghost" size="sm" onClick={() => setRows((prev) => prev.map((r) => (isExistingRef(r.action) ? r : { ...r, selected: true })))}>Marcar todas</Button>
+                <Button variant="ghost" size="sm" onClick={() => setRows((prev) => prev.map((r) => (isExistingRef(r.action) ? r : { ...r, selected: false })))}>Desmarcar todas</Button>
                 <span className="text-xs text-muted-foreground">
                   "Precisa classificação" vem desmarcada por padrão — revise antes de criar.
                 </span>
               </div>
 
               <div className="space-y-3">
-                {rows.map((row) => (
+                {creatableRows.map((row) => (
                   <TaskCard
                     key={row.id}
                     row={row}
@@ -495,14 +527,15 @@ export default function TaskImportView() {
                 ))}
               </div>
 
-              {existingRows.length > 0 && (
+              {existingRefRows.length > 0 && (
                 <>
                   <div className="pt-2">
                     <h3 className="text-sm font-semibold">Relacionadas a tarefas existentes</h3>
                     <p className="text-xs text-muted-foreground">
                       Atualização de tarefa ou nova subtarefa — escolha o cliente pra buscar ao vivo na Taskrow (não
-                      usa cache) e casar cada item pelo número referenciado. Ainda não criam/atualizam nada por aqui:
-                      use o link pra abrir a tarefa no Taskrow e aplicar manualmente.
+                      usa cache) e casar cada item pelo número referenciado. Se o número estiver errado, edite e
+                      clique em "Rebuscar" no próprio card. Ainda não cria/atualiza nada por aqui: use o link pra
+                      abrir a tarefa no Taskrow e aplicar manualmente.
                     </p>
                   </div>
                   <div className="flex flex-wrap items-end gap-2 rounded-md border p-3">
@@ -515,8 +548,15 @@ export default function TaskImportView() {
                     </Button>
                   </div>
                   <div className="space-y-3">
-                    {existingRows.map((row) => (
-                      <ExistingRefCard key={row.id} row={row} hasSearched={hasSearchedExisting} />
+                    {existingRefRows.map((row) => (
+                      <ExistingRefCard
+                        key={row.id}
+                        row={row}
+                        hasSearched={hasSearchedExisting}
+                        canRematch={!!existingTasksByNumber}
+                        onChange={(patch) => updateRow(row.id, patch)}
+                        onRematch={() => rematchRow(row.id)}
+                      />
                     ))}
                   </div>
                 </>
@@ -564,17 +604,11 @@ function TaskCard({
           />
           <div className="flex-1 space-y-1">
             <div className="flex flex-wrap items-center gap-1.5">
-              <Label className="text-xs text-muted-foreground">Título</Label>
-              {row.original.action && ACTION_LABELS[row.original.action] && (
-                <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${ACTION_LABELS[row.original.action].cls}`}>
-                  {ACTION_LABELS[row.original.action].label}
-                </span>
-              )}
-              {row.original.target_task_code && (
-                <span className="text-[11px] text-muted-foreground">
-                  ref. tarefa #{row.original.target_task_code}
-                </span>
-              )}
+              <Label className="text-xs text-muted-foreground">Tipo</Label>
+              <ActionSelect
+                value={row.action}
+                onChange={(action) => onChange(action === "create_task" ? { action, selected: true } : { action, selected: false })}
+              />
             </div>
             <Input value={row.title} onChange={(e) => onChange({ title: e.target.value })} className="font-medium" />
           </div>
@@ -670,20 +704,38 @@ function TaskCard({
   );
 }
 
-function ExistingRefCard({ row, hasSearched }: { row: ExistingRefRow; hasSearched: boolean }) {
+function ExistingRefCard({
+  row, hasSearched, canRematch, onChange, onRematch,
+}: {
+  row: ImportRow;
+  hasSearched: boolean;
+  canRematch: boolean;
+  onChange: (patch: Partial<ImportRow>) => void;
+  onRematch: () => void;
+}) {
   const t = row.original;
-  const action = t.action ? ACTION_LABELS[t.action] : undefined;
 
   return (
     <Card>
       <CardContent className="space-y-2 p-4">
         <div className="flex flex-wrap items-center gap-1.5">
-          {action && (
-            <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${action.cls}`}>{action.label}</span>
-          )}
-          <span className="text-[11px] text-muted-foreground">ref. tarefa #{t.target_task_code}</span>
+          <ActionSelect value={row.action} onChange={(action) => onChange({ action })} />
+          <Label className="text-[11px] text-muted-foreground">Nº da tarefa referenciada</Label>
+          <Input
+            value={row.targetTaskCode}
+            onChange={(e) => onChange({ targetTaskCode: e.target.value, resolved: null })}
+            placeholder="ex: 3935"
+            className="h-6 w-24 text-xs"
+          />
+          <Button
+            variant="ghost" size="sm" className="h-6 gap-1 px-2 text-[11px]"
+            onClick={onRematch}
+            disabled={!canRematch || !row.targetTaskCode.trim()}
+          >
+            <RefreshCw className="h-3 w-3" /> Rebuscar
+          </Button>
         </div>
-        <p className="font-medium">{t.title}</p>
+        <p className="font-medium">{row.title}</p>
         {t.description && <p className="text-sm text-muted-foreground">{t.description}</p>}
 
         {row.resolved ? (
@@ -703,9 +755,11 @@ function ExistingRefCard({ row, hasSearched }: { row: ExistingRefRow; hasSearche
         ) : (
           <div className="flex items-center gap-1.5 rounded-md bg-muted/50 p-2.5 text-xs text-muted-foreground">
             <Link2Off className="h-3.5 w-3.5 shrink-0" />
-            {hasSearched
-              ? `Tarefa #${t.target_task_code} não encontrada nesse cliente — confira se é o cliente certo, ou busque manualmente no Taskrow.`
-              : "Escolha o cliente acima e clique em Buscar."}
+            {!row.targetTaskCode.trim()
+              ? "Informe o número da tarefa acima."
+              : hasSearched
+                ? `Tarefa #${row.targetTaskCode} não encontrada nesse cliente — confira o número/cliente e tente "Rebuscar".`
+                : "Escolha o cliente acima e clique em Buscar."}
           </div>
         )}
       </CardContent>
