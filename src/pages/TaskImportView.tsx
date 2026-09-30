@@ -1,5 +1,5 @@
-import { useMemo, useRef, useState } from "react";
-import { FileJson, Upload, Loader2, CheckCircle2, XCircle, Circle, Send } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { FileJson, Upload, Loader2, CheckCircle2, XCircle, Circle, Send, ChevronsUpDown } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -7,6 +7,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { PageHeader } from "@/components/shared/PageHeader";
@@ -75,6 +77,63 @@ function parseImportJson(raw: string): ImportedTask[] {
   return withTitle;
 }
 
+/** Combobox com busca (debounced) — a API só devolve uma amostra pequena sem termo. */
+function ClientCombobox({
+  value, onChange, placeholder = "Selecione o cliente",
+}: {
+  value: number | undefined;
+  onChange: (clientID: number, clientName: string) => void;
+  placeholder?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const [debounced, setDebounced] = useState("");
+  const [selectedLabel, setSelectedLabel] = useState("");
+
+  useEffect(() => {
+    const t = setTimeout(() => setDebounced(search.trim()), 300);
+    return () => clearTimeout(t);
+  }, [search]);
+
+  const { data: clients, isLoading } = useClients(debounced);
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button variant="outline" role="combobox" aria-expanded={open}
+          className="h-8 w-full justify-between font-normal">
+          <span className="truncate">{value ? selectedLabel || `Cliente #${value}` : placeholder}</span>
+          <ChevronsUpDown className="ml-2 h-3.5 w-3.5 shrink-0 opacity-50" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-72 p-0" align="start">
+        <Command shouldFilter={false}>
+          <CommandInput placeholder="Buscar cliente por nome…" value={search} onValueChange={setSearch} />
+          <CommandList>
+            {isLoading && <div className="flex items-center gap-2 p-3 text-sm text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Buscando…</div>}
+            {!isLoading && <CommandEmpty>{search ? "Nenhum cliente encontrado." : "Digite para buscar."}</CommandEmpty>}
+            <CommandGroup>
+              {(clients || []).map((c) => (
+                <CommandItem
+                  key={c.ClientID}
+                  value={String(c.ClientID)}
+                  onSelect={() => {
+                    onChange(c.ClientID, c.ClientName);
+                    setSelectedLabel(c.ClientName);
+                    setOpen(false);
+                  }}
+                >
+                  {c.ClientName}
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 export default function TaskImportView() {
   const [raw, setRaw] = useState("");
   const [parseError, setParseError] = useState("");
@@ -87,7 +146,6 @@ export default function TaskImportView() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const { data: users, isLoading: loadingUsers } = useUsers();
-  const { data: clients, isLoading: loadingClients } = useClients();
   const { data: globalProjects, isLoading: loadingGlobalProjects } = useProjects(globalClientID);
 
   const process = () => {
@@ -218,17 +276,10 @@ export default function TaskImportView() {
               <div className="grid grid-cols-1 gap-3 rounded-md border p-3 sm:grid-cols-2">
                 <div className="space-y-1.5">
                   <Label>Cliente</Label>
-                  <Select
-                    value={globalClientID ? String(globalClientID) : ""}
-                    onValueChange={(v) => { setGlobalClientID(Number(v)); setGlobalJobID(undefined); }}
-                  >
-                    <SelectTrigger><SelectValue placeholder={loadingClients ? "Carregando…" : "Selecione o cliente"} /></SelectTrigger>
-                    <SelectContent>
-                      {(clients || []).map((c) => (
-                        <SelectItem key={c.ClientID} value={String(c.ClientID)}>{c.ClientName}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <ClientCombobox
+                    value={globalClientID}
+                    onChange={(id) => { setGlobalClientID(id); setGlobalJobID(undefined); }}
+                  />
                 </div>
                 <div className="space-y-1.5">
                   <Label>Projeto</Label>
@@ -267,8 +318,6 @@ export default function TaskImportView() {
                     row={row}
                     users={users}
                     loadingUsers={loadingUsers}
-                    clients={clients}
-                    loadingClients={loadingClients}
                     sameForAll={sameForAll}
                     onChange={(patch) => updateRow(row.id, patch)}
                   />
@@ -289,13 +338,11 @@ export default function TaskImportView() {
 }
 
 function ImportRowView({
-  row, users, loadingUsers, clients, loadingClients, sameForAll, onChange,
+  row, users, loadingUsers, sameForAll, onChange,
 }: {
   row: ImportRow;
   users: ReturnType<typeof useUsers>["data"];
   loadingUsers: boolean;
-  clients: ReturnType<typeof useClients>["data"];
-  loadingClients: boolean;
   sameForAll: boolean;
   onChange: (patch: Partial<ImportRow>) => void;
 }) {
@@ -327,17 +374,11 @@ function ImportRowView({
       </TableCell>
       {!sameForAll && (
         <TableCell className="min-w-40">
-          <Select
-            value={row.clientID ? String(row.clientID) : ""}
-            onValueChange={(v) => onChange({ clientID: Number(v), jobID: undefined })}
-          >
-            <SelectTrigger className="h-8"><SelectValue placeholder={loadingClients ? "…" : "Cliente"} /></SelectTrigger>
-            <SelectContent>
-              {(clients || []).map((c) => (
-                <SelectItem key={c.ClientID} value={String(c.ClientID)}>{c.ClientName}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <ClientCombobox
+            value={row.clientID}
+            onChange={(id) => onChange({ clientID: id, jobID: undefined })}
+            placeholder="Cliente"
+          />
         </TableCell>
       )}
       {!sameForAll && (

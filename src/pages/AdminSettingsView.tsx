@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   BellRing, Lock, Clock, Send, Eye, Save, LogOut, Loader2, MessagesSquare,
-  KeyRound, Link2, Layers,
+  KeyRound, Link2, Layers, ChevronsUpDown,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -12,6 +12,9 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Command, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { toast } from "@/hooks/use-toast";
 import { useUsers } from "@/hooks/useUsers";
@@ -23,7 +26,8 @@ interface ScheduleCfg { enabled: boolean; hour: number; minute: number; weekdays
 interface RunResult { area: string; count: number; status: string; detail: string; }
 interface LastRun { at: string; dryRun: boolean; results: RunResult[]; }
 interface TeamsLink { userID: number; teamsEmail: string; disabled: boolean; }
-interface UserAreaOverride { userID: number; area: string; }
+type UserRole = "diretoria" | "equipe";
+interface UserAreaOverride { userID: number; area?: string; role?: UserRole; }
 
 type RowField = "name" | "email" | "webhookUrl";
 type ApiFn = (path: string, init?: RequestInit) => Promise<any>;
@@ -538,9 +542,63 @@ function TeamsLinksTab({ api }: { api: ApiFn }) {
 
 // ── Aba: Usuários por Área ───────────────────────────────────────────────────────
 
+/** Dropdown de área: escolhe entre as já existentes ou cria uma nova digitando. */
+function AreaCombobox({
+  value, onChange, knownAreas,
+}: {
+  value: string;
+  onChange: (area: string) => void;
+  knownAreas: string[];
+}) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+
+  const filtered = knownAreas.filter((a) => a.toLowerCase().includes(search.trim().toLowerCase()));
+  const exactMatch = knownAreas.some((a) => a.toLowerCase() === search.trim().toLowerCase());
+
+  return (
+    <Popover open={open} onOpenChange={(o) => { setOpen(o); if (o) setSearch(""); }}>
+      <PopoverTrigger asChild>
+        <Button variant="outline" role="combobox" aria-expanded={open}
+          className="h-8 w-full justify-between font-normal">
+          <span className="truncate">{value || "mesma área atual"}</span>
+          <ChevronsUpDown className="ml-2 h-3.5 w-3.5 shrink-0 opacity-50" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-64 p-0" align="start">
+        <Command shouldFilter={false}>
+          <CommandInput placeholder="Buscar ou criar área…" value={search} onValueChange={setSearch} />
+          <CommandList>
+            <CommandGroup>
+              {value && (
+                <CommandItem onSelect={() => { onChange(""); setOpen(false); }} className="text-muted-foreground">
+                  (usar a área atual do Taskrow)
+                </CommandItem>
+              )}
+              {filtered.map((a) => (
+                <CommandItem key={a} value={a} onSelect={() => { onChange(a); setOpen(false); }}>
+                  {a}
+                </CommandItem>
+              ))}
+              {search.trim() && !exactMatch && (
+                <CommandItem value={`__create__${search.trim()}`} onSelect={() => { onChange(search.trim()); setOpen(false); }}>
+                  + Criar área "{search.trim()}"
+                </CommandItem>
+              )}
+              {filtered.length === 0 && !search.trim() && (
+                <div className="p-3 text-sm text-muted-foreground">Nenhuma área cadastrada ainda — digite pra criar.</div>
+              )}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 function UserAreasTab({ api }: { api: ApiFn }) {
   const { data: users, isLoading: loadingUsers } = useUsers();
-  const [overrides, setOverrides] = useState<Record<number, string>>({});
+  const [overrides, setOverrides] = useState<Record<number, { area: string; role: UserRole | "" }>>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -548,8 +606,10 @@ function UserAreasTab({ api }: { api: ApiFn }) {
     setLoading(true);
     try {
       const data = await api("/api/admin/user-areas");
-      const map: Record<number, string> = {};
-      (data.userAreas as UserAreaOverride[] || []).forEach((o) => { map[o.userID] = o.area; });
+      const map: Record<number, { area: string; role: UserRole | "" }> = {};
+      (data.userAreas as UserAreaOverride[] || []).forEach((o) => {
+        map[o.userID] = { area: o.area || "", role: o.role || "" };
+      });
       setOverrides(map);
     } catch (e: any) {
       toast({ title: "Erro ao carregar", description: e.message, variant: "destructive" });
@@ -560,17 +620,28 @@ function UserAreasTab({ api }: { api: ApiFn }) {
 
   useEffect(() => { load(); }, [load]);
 
+  const rowValue = (userID: number) => overrides[userID] ?? { area: "", role: "" as const };
   const setArea = (userID: number, area: string) =>
-    setOverrides((prev) => ({ ...prev, [userID]: area }));
+    setOverrides((prev) => ({ ...prev, [userID]: { area, role: prev[userID]?.role ?? "" } }));
+  const setRole = (userID: number, role: UserRole | "") =>
+    setOverrides((prev) => ({ ...prev, [userID]: { area: prev[userID]?.area ?? "", role } }));
+
+  // Áreas conhecidas = áreas já efetivas dos usuários (Taskrow + overrides já salvos).
+  const knownAreas = useMemo(() => {
+    const set = new Set<string>();
+    (users || []).forEach((u) => { if (u.FunctionGroupName) set.add(u.FunctionGroupName); });
+    Object.values(overrides).forEach((o) => { if (o.area) set.add(o.area); });
+    return Array.from(set).sort((a, b) => a.localeCompare(b, "pt-BR"));
+  }, [users, overrides]);
 
   const save = async () => {
     setSaving(true);
     try {
       const list = Object.entries(overrides)
-        .filter(([, area]) => area.trim())
-        .map(([userID, area]) => ({ userID: Number(userID), area: area.trim() }));
+        .filter(([, o]) => o.area.trim() || o.role)
+        .map(([userID, o]) => ({ userID: Number(userID), area: o.area.trim(), role: o.role || undefined }));
       await api("/api/admin/user-areas", { method: "POST", body: JSON.stringify({ userAreas: list }) });
-      toast({ title: "Áreas salvas" });
+      toast({ title: "Salvo" });
       load();
     } catch (e: any) {
       toast({ title: "Erro ao salvar", description: e.message, variant: "destructive" });
@@ -582,10 +653,11 @@ function UserAreasTab({ api }: { api: ApiFn }) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-base"><Layers className="h-4 w-4 text-primary" /> Usuários por Área</CardTitle>
+        <CardTitle className="flex items-center gap-2 text-base"><Layers className="h-4 w-4 text-primary" /> Usuários — Área e Papel</CardTitle>
         <CardDescription>
-          Por padrão a área vem do cadastro no Taskrow (FunctionGroupName). Preencha aqui só
-          pra corrigir quem estiver errado — vale pro dashboard inteiro e pro alerta de atraso.
+          Área: por padrão vem do cadastro no Taskrow (FunctionGroupName) — sobrescreva só pra
+          corrigir quem estiver errado, escolhendo entre áreas existentes ou criando uma nova.
+          Papel: define quem entra em "Gestão" vs "Operação" na Visão Geral.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -598,7 +670,8 @@ function UserAreasTab({ api }: { api: ApiFn }) {
                 <TableRow>
                   <TableHead>USUÁRIO (TASKROW)</TableHead>
                   <TableHead>ÁREA ATUAL</TableHead>
-                  <TableHead>SOBRESCREVER PARA</TableHead>
+                  <TableHead>SOBRESCREVER ÁREA PARA</TableHead>
+                  <TableHead>PAPEL</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -606,13 +679,25 @@ function UserAreasTab({ api }: { api: ApiFn }) {
                   <TableRow key={u.UserID}>
                     <TableCell className="font-medium">{u.FullName}</TableCell>
                     <TableCell className="text-muted-foreground">{u.FunctionGroupName || "Sem Área"}</TableCell>
-                    <TableCell>
-                      <Input
-                        value={overrides[u.UserID] ?? ""}
-                        onChange={(e) => setArea(u.UserID, e.target.value)}
-                        placeholder="mesma área atual"
-                        className="h-8 min-w-44"
+                    <TableCell className="min-w-44">
+                      <AreaCombobox
+                        value={rowValue(u.UserID).area}
+                        onChange={(area) => setArea(u.UserID, area)}
+                        knownAreas={knownAreas}
                       />
+                    </TableCell>
+                    <TableCell className="min-w-36">
+                      <Select
+                        value={rowValue(u.UserID).role || "none"}
+                        onValueChange={(v) => setRole(u.UserID, v === "none" ? "" : (v as UserRole))}
+                      >
+                        <SelectTrigger className="h-8"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="none">Equipe (padrão)</SelectItem>
+                          <SelectItem value="equipe">Equipe</SelectItem>
+                          <SelectItem value="diretoria">Diretoria</SelectItem>
+                        </SelectContent>
+                      </Select>
                     </TableCell>
                   </TableRow>
                 ))}
@@ -620,7 +705,7 @@ function UserAreasTab({ api }: { api: ApiFn }) {
             </Table>
             <div className="mt-4 flex justify-end">
               <Button onClick={save} disabled={saving} className="gap-2">
-                {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />} Salvar áreas
+                {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />} Salvar
               </Button>
             </div>
           </>

@@ -15,13 +15,10 @@ import { QueryErrorState, EmptyState } from "@/components/shared/QueryStates";
 import { useAllTasks } from "@/hooks/useAllTasks";
 import { useUsers } from "@/hooks/useUsers";
 import { useClients } from "@/hooks/useClients";
+import { useUserRoles } from "@/hooks/useUserRoles";
 import { classifyTask } from "@/lib/classifyTask";
 import { calcRiskScore } from "@/lib/riskScore";
 import type { TaskrowTask, TaskrowUser, TaskStatus } from "@/types/taskrow";
-
-// Nomes (parciais, case-insensitive) das pessoas classificadas como Gestão.
-// Edite esta lista para adicionar ou remover membros.
-const GESTAO_NAMES = ["giu", "sérgio junior", "isabel aquino", "bruno", "michelle"];
 
 function countByStatus(tasks: TaskrowTask[]) {
   const counts: Record<TaskStatus, number> = {
@@ -256,17 +253,18 @@ export default function Overview() {
   const { data: tasks, isLoading: loadingTasks, error: errorTasks, refetch: refetchTasks } = useAllTasks();
   const { data: users } = useUsers();
   const { data: clients } = useClients();
+  const { data: rolesMap } = useUserRoles();
 
   const counts = useMemo(() => tasks ? countByStatus(tasks) : null, [tasks]);
 
   const { gestao, operacao } = useMemo(() => {
     if (!tasks || !users) return { gestao: [], operacao: [] };
     const all = getUserMetrics(tasks, users);
-    const g = all.filter(u => GESTAO_NAMES.some(name => u.name.toLowerCase().includes(name)));
+    const g = all.filter(u => rolesMap?.get(u.uid) === "diretoria");
     const gIds = new Set(g.map(u => u.uid));
-    const o = all.filter(u => !gIds.has(u.uid)).slice(0, 8);
+    const o = all.filter(u => !gIds.has(u.uid));
     return { gestao: g, operacao: o };
-  }, [tasks, users]);
+  }, [tasks, users, rolesMap]);
 
   const clientRisks = useMemo(() => {
     if (!tasks || !clients) return [];

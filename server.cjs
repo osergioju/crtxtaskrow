@@ -597,7 +597,7 @@ const DEFAULT_ADMIN = {
   responsaveis: [], // [{ area, name, email, webhookUrl }] — webhook do canal do Teams
   lastRun: null,    // { at, dryRun, results: [{ area, count, status, detail }] }
   lastRunDate: null, // "YYYY-MM-DD" — evita disparo automático duplicado no dia
-  userAreas: [],   // [{ userID, area }] — override manual de área por usuário
+  userAreas: [],   // [{ userID, area?, role? }] — override manual de área e/ou papel (diretoria/equipe) por usuário
   teamsLinks: [],  // [{ userID, teamsEmail, disabled }] — vínculo Taskrow↔Teams
 };
 
@@ -1041,14 +1041,18 @@ async function handleAdminApi(req, res, urlPath, method) {
     return sendJson(res, 200, { ok: true });
   }
 
-  // POST /api/admin/user-areas — salva override de área por usuário
+  // POST /api/admin/user-areas — salva override de área e/ou papel (diretoria/equipe) por usuário
   if (urlPath === "/api/admin/user-areas" && method === "POST") {
     const body = await parseBody(req);
     const a = readAdmin();
     if (Array.isArray(body.userAreas)) {
       a.userAreas = body.userAreas
-        .map((o) => ({ userID: Number(o.userID), area: String(o.area || "").trim() }))
-        .filter((o) => Number.isFinite(o.userID) && o.area);
+        .map((o) => ({
+          userID: Number(o.userID),
+          area: String(o.area || "").trim(),
+          role: o.role === "diretoria" || o.role === "equipe" ? o.role : undefined,
+        }))
+        .filter((o) => Number.isFinite(o.userID) && (o.area || o.role));
     }
     saveAdmin(a);
     return sendJson(res, 200, { ok: true });
