@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { FileJson, Upload, Loader2, CheckCircle2, XCircle, Circle, Send, ChevronsUpDown, ExternalLink, Link2Off, RefreshCw } from "lucide-react";
+import { FileJson, Upload, Loader2, CheckCircle2, XCircle, Circle, Send, ChevronsUpDown, ExternalLink, Link2Off, RefreshCw, AlertTriangle } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -34,7 +34,12 @@ interface ImportedTask {
   notes?: string | null;
   source?: { meeting?: string | null; timestamp?: string | null } | null;
   action?: ImportAction | null;
+  /** ID local deste item dentro do mesmo lote — usado por outros itens como parent_action_id. */
+  id?: string | null;
+  /** aponta pra uma tarefa já existente no Taskrow (fora deste lote). */
   target_task_code?: string | null;
+  /** aponta pro "id" de outro item NESTE MESMO lote (tarefa-pai ainda não criada). */
+  parent_action_id?: string | null;
   classification?: string | null;
 }
 
@@ -51,9 +56,11 @@ function defaultAction(t: ImportedTask): ImportAction {
   return "create_task";
 }
 
-/** Tarefa relacionada a uma já existente — vai pro bloco separado, nunca cria do zero. */
-function isExistingRef(action: ImportAction): boolean {
-  return action === "update_task" || action === "create_subtask";
+/** Nova tarefa, ou subtarefa de uma tarefa nova deste mesmo lote — ambas seguras pra marcar por padrão. */
+function defaultSelected(t: ImportedTask, action: ImportAction): boolean {
+  if (action === "create_task") return true;
+  if (action === "create_subtask" && t.parent_action_id && !t.target_task_code) return true;
+  return false;
 }
 
 interface JobRef {
@@ -65,7 +72,8 @@ interface JobRef {
 interface ImportRow {
   id: string;
   original: ImportedTask;
-  action: ImportAction; // editável — reclassificar move o card entre os dois blocos
+  localId: string; // = original.id — usado só pra outros itens acharem o pai (parent_action_id)
+  action: ImportAction; // editável — reclassificar move o card entre os blocos
   selected: boolean;
   title: string;
   description: string;
@@ -75,10 +83,36 @@ interface ImportRow {
   clientID: number | undefined;
   clientName: string;
   job: JobRef | undefined;
-  targetTaskCode: string; // editável — só relevante quando action é update_task/create_subtask
+  targetTaskCode: string; // editável — tarefa já existente fora deste lote
+  parentActionId: string; // editável — tarefa-pai dentro deste mesmo lote
   resolved: TaskrowTask | null;
   status: "idle" | "pending" | "success" | "error";
   resultMessage?: string;
+}
+
+/** Acha a linha-pai (mesmo lote) de uma subtarefa, por parentActionId ↔ localId. */
+function findParentRow(rows: ImportRow[], row: ImportRow): ImportRow | undefined {
+  if (row.action !== "create_subtask") return undefined;
+  const pid = row.parentActionId.trim();
+  if (!pid) return undefined;
+  return rows.find((r) => r.id !== row.id && r.localId && r.localId === pid);
+}
+
+/**
+ * "new" = cria direto (tarefa nova, ou precisa classificação).
+ * "batchChild" = subtarefa de uma tarefa nova deste mesmo lote (cria em 2 passos, depois da pai).
+ * "existingRef" = atualização/subtarefa de algo já existente no Taskrow (fora deste lote).
+ */
+function rowBucket(row: ImportRow, allRows: ImportRow[]): "new" | "batchChild" | "existingRef" {
+  if (row.action === "update_task") return "existingRef";
+  if (row.action === "create_subtask") return findParentRow(allRows, row) ? "batchChild" : "existingRef";
+  return "new";
+}
+
+interface SaveTaskResponse {
+  Success: boolean;
+  Message?: string;
+  Entity?: { TaskID: number; TaskNumber: number };
 }
 
 /**
@@ -118,6 +152,29 @@ function composeBriefing(row: ImportRow): string {
     parts.push(`<p><em>Origem: reunião "${escapeHtml(t.source.meeting)}"${ts}</em></p>`);
   }
   return parts.join("");
+}
+
+/** Payload base do SaveTask — reaproveitado por tarefas novas e por cada passo 2 de subtarefa. */
+function buildSaveTaskPayload(row: ImportRow, job: JobRef, clientName: string): Record<string, unknown> {
+  const payload: Record<string, unknown> = {
+    TaskTitle: row.title.trim(),
+    JobID: job.id,
+    jobNumber: job.number,
+    OwnerUserID: row.ownerUserID,
+    RequestTypeID: FIXED_REQUEST_TYPE_ID,
+    ExternalCode: generateExternalCode(clientName, job.title),
+    // TaskItemComment nunca vazio — string vazia já causou um 500 sem corpo
+    // de erro por parte da Taskrow; título serve de fallback.
+    TaskItemComment: composeBriefing(row) || `<p>${escapeHtml(row.title.trim())}</p>`,
+  };
+  if (row.dueDate) payload.DueDate = `${row.dueDate}T00:00:00`;
+  // Só manda MemberListString quando há participante extra além do
+  // responsável — campo mais novo, não totalmente validado em todo formato.
+  if (row.ownerUserID && row.participantIDs.length > 0) {
+    const memberIDs = Array.from(new Set([row.ownerUserID, ...row.participantIDs]));
+    payload.MemberListString = memberIDs.join(",");
+  }
+  return payload;
 }
 
 function parseImportJson(raw: string): ImportedTask[] {
@@ -284,8 +341,20 @@ export default function TaskImportView() {
   const updateRow = (id: string, patch: Partial<ImportRow>) =>
     setRows((prev) => prev.map((r) => (r.id === id ? { ...r, ...patch } : r)));
 
-  const creatableRows = rows.filter((r) => !isExistingRef(r.action));
-  const existingRefRows = rows.filter((r) => isExistingRef(r.action));
+  const newRows = rows.filter((r) => rowBucket(r, rows) === "new");
+  const batchChildRows = rows.filter((r) => rowBucket(r, rows) === "batchChild");
+  const existingRefRows = rows.filter((r) => rowBucket(r, rows) === "existingRef");
+  const orphanedChildren = batchChildRows.filter((c) => !newRows.some((p) => p.id === findParentRow(rows, c)?.id));
+
+  const insertablePlan = useMemo(() => {
+    return rows.filter((r) => {
+      const bucket = rowBucket(r, rows);
+      if (bucket === "new") return r.selected;
+      if (bucket === "batchChild") return r.selected && !!findParentRow(rows, r)?.selected;
+      return false;
+    });
+  }, [rows]);
+  const selectedCount = insertablePlan.length;
 
   /**
    * Busca ao vivo na Taskrow (não em cache) as tarefas do cliente escolhido e
@@ -300,7 +369,7 @@ export default function TaskImportView() {
       const byNumber = new Map(tasks.map((t) => [String(t.taskNumber), t]));
       setExistingTasksByNumber(byNumber);
       setRows((prev) => prev.map((r) => (
-        isExistingRef(r.action)
+        rowBucket(r, prev) === "existingRef"
           ? { ...r, resolved: (r.targetTaskCode.trim() && byNumber.get(r.targetTaskCode.trim())) || null }
           : r
       )));
@@ -325,13 +394,14 @@ export default function TaskImportView() {
     setParseError("");
     try {
       const tasks = parseImportJson(raw);
-      const newRows: ImportRow[] = tasks.map((t, i) => {
+      const newImportRows: ImportRow[] = tasks.map((t, i) => {
         const action = defaultAction(t);
         return {
           id: `${Date.now()}-${i}`,
           original: t,
+          localId: t.id || "",
           action,
-          selected: action === "create_task",
+          selected: defaultSelected(t, action),
           title: t.title.trim(),
           description: t.description || "",
           ownerUserID: undefined,
@@ -341,11 +411,12 @@ export default function TaskImportView() {
           clientName: "",
           job: undefined,
           targetTaskCode: t.target_task_code || "",
+          parentActionId: t.parent_action_id || "",
           resolved: null,
           status: "idle",
         };
       });
-      setRows(newRows);
+      setRows(newImportRows);
       setExistingClientID(undefined);
       setExistingTasksByNumber(null);
       setHasSearchedExisting(false);
@@ -362,21 +433,57 @@ export default function TaskImportView() {
     reader.readAsText(file);
   };
 
-  const selectedCount = creatableRows.filter((r) => r.selected).length;
-
   const canInsert = useMemo(() => {
-    const selected = creatableRows.filter((r) => r.selected);
-    if (selected.length === 0) return false;
-    return selected.every((r) => {
+    if (insertablePlan.length === 0) return false;
+    return insertablePlan.every((r) => {
+      if (rowBucket(r, rows) === "batchChild") return r.title.trim() && r.ownerUserID;
       const job = sameForAll ? globalJob : r.job;
       return r.title.trim() && r.ownerUserID && job;
     });
-  }, [creatableRows, sameForAll, globalJob]);
+  }, [insertablePlan, rows, sameForAll, globalJob]);
+
+  /** Passo 2: cria o item de checklist e promove pra tarefa completa, vinculada à pai já criada. */
+  const createChildSubtask = async (child: ImportRow, parentTaskID: number, parentTaskNumber: number, job: JobRef, clientName: string) => {
+    if (!child.ownerUserID || !child.title.trim()) {
+      updateRow(child.id, { status: "error", resultMessage: "Faltam campos obrigatórios" });
+      return;
+    }
+    updateRow(child.id, { status: "pending" });
+    try {
+      const sub = await apiPost<{ Entity?: { SubtaskID?: number; Task1?: { RowVersion?: string } } }>(
+        "/api/v1/Task/SaveSubtask",
+        { subtask: { TaskID: parentTaskID, SubtaskID: 0, Title: child.title.trim(), Done: false } }
+      );
+      const subtaskID = sub.Entity?.SubtaskID;
+      const rowVersion = sub.Entity?.Task1?.RowVersion;
+      if (!subtaskID || !rowVersion) {
+        updateRow(child.id, { status: "error", resultMessage: "Falha ao criar item de subtarefa (resposta inesperada da Taskrow)" });
+        return;
+      }
+      const payload = {
+        ...buildSaveTaskPayload(child, job, clientName),
+        Title: child.title.trim(),
+        TaskID: parentTaskID,
+        TaskNumber: parentTaskNumber,
+        RowVersion: rowVersion,
+        createChildTask: true,
+        SubtaskID: subtaskID,
+      };
+      const res = await apiPost<SaveTaskResponse>("/api/v1/Task/SaveTask", payload);
+      if (res.Success === false) {
+        updateRow(child.id, { status: "error", resultMessage: res.Message || "Falha ao criar subtarefa" });
+      } else {
+        updateRow(child.id, { status: "success", resultMessage: `Subtarefa criada #${res.Entity?.TaskNumber ?? "?"}` });
+      }
+    } catch (e: any) {
+      updateRow(child.id, { status: "error", resultMessage: e.message || "Erro na requisição" });
+    }
+  };
 
   const insertAll = async () => {
     setInserting(true);
     for (const row of rows) {
-      if (isExistingRef(row.action) || !row.selected) continue;
+      if (rowBucket(row, rows) !== "new" || !row.selected) continue;
       const job = sameForAll ? globalJob : row.job;
       const clientName = sameForAll ? globalClientName : row.clientName;
       if (!row.ownerUserID || !job || !row.title.trim()) {
@@ -384,37 +491,26 @@ export default function TaskImportView() {
         continue;
       }
       updateRow(row.id, { status: "pending" });
+      let parentTaskID: number | undefined;
+      let parentTaskNumber: number | undefined;
       try {
-        const payload: Record<string, unknown> = {
-          TaskTitle: row.title.trim(),
-          JobID: job.id,
-          jobNumber: job.number,
-          OwnerUserID: row.ownerUserID,
-          RequestTypeID: FIXED_REQUEST_TYPE_ID,
-          ExternalCode: generateExternalCode(clientName, job.title),
-          // TaskItemComment nunca vazio — string vazia já causou um 500 sem
-          // corpo de erro por parte da Taskrow; título serve de fallback.
-          TaskItemComment: composeBriefing(row) || `<p>${escapeHtml(row.title.trim())}</p>`,
-        };
-        if (row.dueDate) payload.DueDate = `${row.dueDate}T00:00:00`;
-        // Só manda MemberListString quando há participante extra além do
-        // responsável — campo novo, ainda não confirmado como seguro em
-        // todos os formatos contra a API real da Taskrow.
-        if (row.participantIDs.length > 0) {
-          const memberIDs = Array.from(new Set([row.ownerUserID, ...row.participantIDs]));
-          payload.MemberListString = memberIDs.join(",");
-        }
-        const res = await apiPost<{ Success: boolean; Message?: string; Entity?: { TaskID: number; TaskNumber: number } }>(
-          "/api/v1/Task/SaveTask",
-          payload
-        );
-        if (res.Success === false) {
+        const res = await apiPost<SaveTaskResponse>("/api/v1/Task/SaveTask", buildSaveTaskPayload(row, job, clientName));
+        if (res.Success === false || !res.Entity) {
           updateRow(row.id, { status: "error", resultMessage: res.Message || "Falha ao criar" });
-        } else {
-          updateRow(row.id, { status: "success", resultMessage: `Criada #${res.Entity?.TaskNumber ?? "?"}` });
+          continue;
         }
+        updateRow(row.id, { status: "success", resultMessage: `Criada #${res.Entity.TaskNumber}` });
+        parentTaskID = res.Entity.TaskID;
+        parentTaskNumber = res.Entity.TaskNumber;
       } catch (e: any) {
         updateRow(row.id, { status: "error", resultMessage: e.message || "Erro na requisição" });
+        continue;
+      }
+
+      // Subtarefas deste mesmo lote, selecionadas — só roda depois da pai existir de verdade.
+      const children = batchChildRows.filter((c) => c.selected && findParentRow(rows, c)?.id === row.id);
+      for (const child of children) {
+        await createChildSubtask(child, parentTaskID, parentTaskNumber, job, clientName);
       }
     }
     setInserting(false);
@@ -460,7 +556,7 @@ export default function TaskImportView() {
         <SheetContent className="flex w-full flex-col gap-0 p-0 sm:max-w-[1100px]">
           <SheetHeader className="border-b px-6 py-4">
             <SheetTitle>
-              {selectedCount} de {creatableRows.length} nova(s) tarefa(s) selecionada(s)
+              {selectedCount} tarefa(s)/subtarefa(s) selecionada(s) para criar
               {existingRefRows.length > 0 ? ` · ${existingRefRows.length} relacionada(s) a tarefas existentes` : ""}
             </SheetTitle>
             <SheetDescription>
@@ -507,35 +603,64 @@ export default function TaskImportView() {
               )}
 
               <div className="flex flex-wrap items-center gap-2">
-                <Button variant="ghost" size="sm" onClick={() => setRows((prev) => prev.map((r) => (isExistingRef(r.action) ? r : { ...r, selected: true })))}>Marcar todas</Button>
-                <Button variant="ghost" size="sm" onClick={() => setRows((prev) => prev.map((r) => (isExistingRef(r.action) ? r : { ...r, selected: false })))}>Desmarcar todas</Button>
+                <Button variant="ghost" size="sm" onClick={() => setRows((prev) => prev.map((r) => (rowBucket(r, prev) === "new" ? { ...r, selected: true } : r)))}>Marcar todas</Button>
+                <Button variant="ghost" size="sm" onClick={() => setRows((prev) => prev.map((r) => (rowBucket(r, prev) === "new" ? { ...r, selected: false } : r)))}>Desmarcar todas</Button>
                 <span className="text-xs text-muted-foreground">
                   "Precisa classificação" vem desmarcada por padrão — revise antes de criar.
                 </span>
               </div>
 
               <div className="space-y-3">
-                {creatableRows.map((row) => (
-                  <TaskCard
-                    key={row.id}
-                    row={row}
-                    users={users}
-                    loadingUsers={loadingUsers}
-                    sameForAll={sameForAll}
-                    onChange={(patch) => updateRow(row.id, patch)}
-                  />
-                ))}
+                {newRows.map((row) => {
+                  const children = batchChildRows.filter((c) => findParentRow(rows, c)?.id === row.id);
+                  return (
+                    <div key={row.id} className="space-y-2">
+                      <TaskCard
+                        row={row}
+                        users={users}
+                        loadingUsers={loadingUsers}
+                        sameForAll={sameForAll}
+                        onChange={(patch) => updateRow(row.id, patch)}
+                      />
+                      {children.length > 0 && (
+                        <div className="ml-6 space-y-2 border-l-2 pl-4">
+                          <p className="text-xs font-medium text-muted-foreground">{children.length} subtarefa(s) desta tarefa</p>
+                          {children.map((child) => (
+                            <ChildSubtaskRow
+                              key={child.id}
+                              row={child}
+                              parentSelected={row.selected}
+                              users={users}
+                              loadingUsers={loadingUsers}
+                              onChange={(patch) => updateRow(child.id, patch)}
+                            />
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
+
+              {orphanedChildren.length > 0 && (
+                <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 p-3 text-xs text-amber-800">
+                  <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  <div>
+                    <p className="font-medium">{orphanedChildren.length} subtarefa(s) sem tarefa-pai visível</p>
+                    <p>A tarefa-pai referenciada não está mais classificada como "Nova tarefa". Reclassifique a pai de volta, ou reclassifique estas: {orphanedChildren.map((c) => `"${c.title}"`).join(", ")}.</p>
+                  </div>
+                </div>
+              )}
 
               {existingRefRows.length > 0 && (
                 <>
                   <div className="pt-2">
                     <h3 className="text-sm font-semibold">Relacionadas a tarefas existentes</h3>
                     <p className="text-xs text-muted-foreground">
-                      Atualização de tarefa ou nova subtarefa — escolha o cliente pra buscar ao vivo na Taskrow (não
-                      usa cache) e casar cada item pelo número referenciado. Se o número estiver errado, edite e
-                      clique em "Rebuscar" no próprio card. Ainda não cria/atualiza nada por aqui: use o link pra
-                      abrir a tarefa no Taskrow e aplicar manualmente.
+                      Atualização de tarefa ou subtarefa de algo fora deste lote — escolha o cliente pra buscar ao
+                      vivo na Taskrow (não usa cache) e casar cada item pelo número referenciado. Se o número
+                      estiver errado, edite e clique em "Rebuscar" no próprio card. Ainda não cria/atualiza nada
+                      por aqui: use o link pra abrir a tarefa no Taskrow e aplicar manualmente.
                     </p>
                   </div>
                   <div className="flex flex-wrap items-end gap-2 rounded-md border p-3">
@@ -566,7 +691,7 @@ export default function TaskImportView() {
 
           <div className="flex items-center justify-end gap-2 border-t px-6 py-4">
             <Button onClick={insertAll} disabled={!canInsert || inserting} className="gap-2">
-              {inserting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />} Inserir {selectedCount} tarefa(s) no Taskrow
+              {inserting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />} Inserir {selectedCount} no Taskrow
             </Button>
           </div>
         </SheetContent>
@@ -699,6 +824,60 @@ function TaskCard({
             </p>
           )}
         </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+/** Linha compacta de subtarefa aninhada sob a tarefa-pai (mesmo lote) — cliente/projeto herdados da pai. */
+function ChildSubtaskRow({
+  row, parentSelected, users, loadingUsers, onChange,
+}: {
+  row: ImportRow;
+  parentSelected: boolean;
+  users: TaskrowUser[] | undefined;
+  loadingUsers: boolean;
+  onChange: (patch: Partial<ImportRow>) => void;
+}) {
+  return (
+    <Card className={row.selected && parentSelected ? "" : "opacity-60"}>
+      <CardContent className="space-y-2 p-3">
+        <div className="flex items-start gap-2">
+          <Checkbox
+            checked={row.selected}
+            onCheckedChange={(v) => onChange({ selected: !!v })}
+            disabled={!parentSelected}
+            className="mt-2"
+          />
+          <div className="flex-1 space-y-1">
+            <ActionSelect value={row.action} onChange={(action) => onChange({ action })} />
+            <Input value={row.title} onChange={(e) => onChange({ title: e.target.value })} className="h-8 text-sm font-medium" />
+          </div>
+          <StatusIcon status={row.status} />
+        </div>
+        {!parentSelected && (
+          <p className="text-xs text-amber-600">Marque a tarefa-pai acima pra poder criar esta subtarefa.</p>
+        )}
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          <Select value={row.ownerUserID ? String(row.ownerUserID) : ""} onValueChange={(v) => onChange({ ownerUserID: Number(v) })}>
+            <SelectTrigger className="h-8 text-xs"><SelectValue placeholder={loadingUsers ? "…" : "Responsável"} /></SelectTrigger>
+            <SelectContent>
+              {(users || []).filter((u) => !u.Inactive).map((u) => (
+                <SelectItem key={u.UserID} value={String(u.UserID)}>{u.FullName}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Input type="date" value={row.dueDate} onChange={(e) => onChange({ dueDate: e.target.value })} className="h-8 text-xs" />
+        </div>
+        <Textarea
+          value={row.description}
+          onChange={(e) => onChange({ description: e.target.value })}
+          className="min-h-14 text-xs"
+          placeholder="Descrição…"
+        />
+        {row.resultMessage && (
+          <p className={`text-xs ${row.status === "error" ? "text-destructive" : "text-muted-foreground"}`}>{row.resultMessage}</p>
+        )}
       </CardContent>
     </Card>
   );
