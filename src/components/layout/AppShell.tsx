@@ -11,9 +11,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <Sidebar />
       </aside>
 
-      <div className="flex flex-1 flex-col">
+      <div className="flex min-w-0 flex-1 flex-col">
         <TopBar />
-        <main className="flex-1 overflow-auto p-4 lg:p-6">
+        <main className="min-w-0 flex-1 overflow-auto p-4 lg:p-6">
           <ApiKeyAlert />
           <ErrorBoundary>
             {children}

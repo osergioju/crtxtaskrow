@@ -105,7 +105,7 @@ function RulerColumn({ bucket, users }: { bucket: RulerBucket; users: TaskrowUse
 
   return (
     <div className={cn(
-      "flex w-72 shrink-0 flex-col rounded-lg border bg-muted/30",
+      "flex w-72 shrink-0 flex-col rounded-lg border bg-muted/30 max-h-[calc(100vh-211px)]",
       isOverdue && "border-destructive/40 bg-destructive/5"
     )}>
       <div className="flex items-center justify-between gap-2 border-b px-3 py-2.5">
@@ -117,7 +117,7 @@ function RulerColumn({ bucket, users }: { bucket: RulerBucket; users: TaskrowUse
       </div>
 
       <SortableContext items={bucket.items.map((i) => i.key)} strategy={verticalListSortingStrategy}>
-        <div className="flex-1 space-y-2 p-2">
+        <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-2">
           {bucket.items.map((item, index) => (
             <RulerCard
               key={item.key}
