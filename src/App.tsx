@@ -21,6 +21,7 @@ import ExtranetView from "./pages/ExtranetView";
 import CapacityView from "./pages/CapacityView";
 import AdminSettingsView from "./pages/AdminSettingsView";
 import TaskImportView from "./pages/TaskImportView";
+import RulerView from "./pages/RulerView";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -43,6 +44,7 @@ function InternalApp() {
         <Route path="/analytics" element={<AnalyticsView />} />
         <Route path="/extranet" element={<ExtranetView />} />
         <Route path="/capacidade" element={<CapacityView />} />
+        <Route path="/regua" element={<RulerView />} />
         <Route path="/importar" element={<TaskImportView />} />
         <Route path="/admin" element={<AdminSettingsView />} />
         <Route path="*" element={<NotFound />} />

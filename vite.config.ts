@@ -42,12 +42,14 @@ const RESPONSES_FILE = path.join(DATA_DIR, "nps_responses.json");
 const CYCLES_FILE = path.join(DATA_DIR, "nps_cycles.json");
 const CONFIG_FILE = path.join(DATA_DIR, "config.json");
 const TASKS_FILE = path.join(DATA_DIR, "tasks.json");
+const REGUA_FILE = path.join(DATA_DIR, "regua.json");
 
 function ensureDataFiles() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
   if (!fs.existsSync(TOKENS_FILE)) fs.writeFileSync(TOKENS_FILE, "[]", "utf-8");
   if (!fs.existsSync(RESPONSES_FILE)) fs.writeFileSync(RESPONSES_FILE, "[]", "utf-8");
   if (!fs.existsSync(CYCLES_FILE)) fs.writeFileSync(CYCLES_FILE, "[]", "utf-8");
+  if (!fs.existsSync(REGUA_FILE)) fs.writeFileSync(REGUA_FILE, JSON.stringify({ localTasks: [], priorities: {} }, null, 2), "utf-8");
 }
 
 const readTokens = (): NpsToken[] => { try { return JSON.parse(fs.readFileSync(TOKENS_FILE, "utf-8")); } catch { return []; } };
@@ -57,6 +59,28 @@ const readCycles = (): NpsCycle[] => { try { return JSON.parse(fs.readFileSync(C
 const saveTokens = (d: NpsToken[]) => fs.writeFileSync(TOKENS_FILE, JSON.stringify(d, null, 2), "utf-8");
 const saveResponses = (d: NpsResponse[]) => fs.writeFileSync(RESPONSES_FILE, JSON.stringify(d, null, 2), "utf-8");
 const saveCycles = (d: NpsCycle[]) => fs.writeFileSync(CYCLES_FILE, JSON.stringify(d, null, 2), "utf-8");
+
+interface LocalRulerTask {
+  id: string;
+  title: string;
+  description: string;
+  ownerUserID: number | null;
+  dueDate: string;
+  createdAt: string;
+}
+interface ReguaState {
+  localTasks: LocalRulerTask[];
+  priorities: Record<string, string[]>;
+}
+function readRegua(): ReguaState {
+  try {
+    const d = JSON.parse(fs.readFileSync(REGUA_FILE, "utf-8"));
+    return { localTasks: Array.isArray(d.localTasks) ? d.localTasks : [], priorities: d.priorities && typeof d.priorities === "object" ? d.priorities : {} };
+  } catch {
+    return { localTasks: [], priorities: {} };
+  }
+}
+const saveRegua = (d: ReguaState) => fs.writeFileSync(REGUA_FILE, JSON.stringify(d, null, 2), "utf-8");
 
 function readConfig(): Record<string, string> {
   try { return JSON.parse(fs.readFileSync(CONFIG_FILE, "utf-8")); } catch { return {}; }
@@ -226,6 +250,87 @@ function npsApiPlugin() {
         if (resultsMatch && method === "GET") {
           const clientId = resultsMatch[1];
           return send(res, 200, readResponses().filter((r) => r.clientId === clientId));
+        }
+
+        return send(res, 404, { error: "Endpoint não encontrado" });
+      });
+    },
+  };
+}
+
+// ─── Régua Vite Plugin ────────────────────────────────────────────────────────
+// Espelha handleReguaApi do server.cjs — necessário pro /regua funcionar com `npm run dev`
+// (mesmo padrão do npsApiPlugin acima: dev não roda o server.cjs de produção).
+
+function reguaApiPlugin() {
+  return {
+    name: "regua-api",
+    configureServer(server: { middlewares: { use: (fn: (req: IncomingMessage, res: ServerResponse, next: () => void) => void) => void } }) {
+      server.middlewares.use(async (req, res, next) => {
+        const url = req.url ?? "";
+        const method = req.method ?? "GET";
+
+        if (!url.startsWith("/api/regua")) return next();
+
+        ensureDataFiles();
+
+        if (url === "/api/regua" && method === "GET") {
+          return send(res, 200, readRegua());
+        }
+
+        if (url === "/api/regua/tasks" && method === "POST") {
+          const body = await parseBody(req);
+          const title = String(body.title || "").trim();
+          const dueDate = String(body.dueDate || "").trim();
+          if (!title) return send(res, 400, { error: "title obrigatório" });
+          if (!/^\d{4}-\d{2}-\d{2}$/.test(dueDate)) return send(res, 400, { error: "dueDate obrigatório (yyyy-mm-dd)" });
+          const data = readRegua();
+          const task: LocalRulerTask = {
+            id: randomUUID(),
+            title,
+            description: body.description ? String(body.description) : "",
+            ownerUserID: body.ownerUserID != null ? Number(body.ownerUserID) : null,
+            dueDate,
+            createdAt: new Date().toISOString(),
+          };
+          data.localTasks.push(task);
+          saveRegua(data);
+          return send(res, 201, task);
+        }
+
+        const taskMatch = url.match(/^\/api\/regua\/tasks\/([^/?]+)$/);
+        if (taskMatch && method === "PUT") {
+          const body = await parseBody(req);
+          const data = readRegua();
+          const task = data.localTasks.find((t) => t.id === taskMatch[1]);
+          if (!task) return send(res, 404, { error: "Tarefa local não encontrada" });
+          if (body.title != null) task.title = String(body.title).trim();
+          if (body.description != null) task.description = String(body.description);
+          if (body.ownerUserID !== undefined) task.ownerUserID = body.ownerUserID != null ? Number(body.ownerUserID) : null;
+          if (body.dueDate != null && /^\d{4}-\d{2}-\d{2}$/.test(String(body.dueDate))) task.dueDate = String(body.dueDate);
+          saveRegua(data);
+          return send(res, 200, task);
+        }
+
+        if (taskMatch && method === "DELETE") {
+          const data = readRegua();
+          data.localTasks = data.localTasks.filter((t) => t.id !== taskMatch[1]);
+          const key = `local:${taskMatch[1]}`;
+          for (const bucket of Object.keys(data.priorities)) {
+            data.priorities[bucket] = data.priorities[bucket].filter((k) => k !== key);
+          }
+          saveRegua(data);
+          return send(res, 200, { ok: true });
+        }
+
+        const priorityMatch = url.match(/^\/api\/regua\/priorities\/([^/?]+)$/);
+        if (priorityMatch && method === "PUT") {
+          const body = await parseBody(req);
+          if (!Array.isArray(body.order)) return send(res, 400, { error: "order (array) obrigatório" });
+          const data = readRegua();
+          data.priorities[decodeURIComponent(priorityMatch[1])] = (body.order as unknown[]).map(String);
+          saveRegua(data);
+          return send(res, 200, { ok: true });
         }
 
         return send(res, 404, { error: "Endpoint não encontrado" });
@@ -455,6 +560,7 @@ export default defineConfig(({ mode }) => ({
   plugins: [
     react(),
     npsApiPlugin(),
+    reguaApiPlugin(),
     analyticsApiPlugin(),
     mode === "development" && componentTagger(),
   ].filter(Boolean),

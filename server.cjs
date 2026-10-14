@@ -39,6 +39,7 @@ const CYCLES_FILE = path.join(DATA_DIR, "nps_cycles.json");
 const CONFIG_FILE = path.join(DATA_DIR, "config.json");
 const ADMIN_FILE = path.join(DATA_DIR, "admin.json");
 const USERS_FILE = path.join(DATA_DIR, "users.json");
+const REGUA_FILE = path.join(DATA_DIR, "regua.json");
 
 // ── Data helpers ──────────────────────────────────────────────────────────────
 
@@ -47,6 +48,7 @@ function ensureDataFiles() {
   if (!fs.existsSync(TOKENS_FILE)) fs.writeFileSync(TOKENS_FILE, "[]", "utf-8");
   if (!fs.existsSync(RESPONSES_FILE)) fs.writeFileSync(RESPONSES_FILE, "[]", "utf-8");
   if (!fs.existsSync(CYCLES_FILE)) fs.writeFileSync(CYCLES_FILE, "[]", "utf-8");
+  if (!fs.existsSync(REGUA_FILE)) fs.writeFileSync(REGUA_FILE, JSON.stringify({ localTasks: [], priorities: {} }, null, 2), "utf-8");
 }
 ensureDataFiles();
 
@@ -59,6 +61,16 @@ const readCycles = () => readJSON(CYCLES_FILE);
 const saveTokens = (d) => writeJSON(TOKENS_FILE, d);
 const saveResponses = (d) => writeJSON(RESPONSES_FILE, d);
 const saveCycles = (d) => writeJSON(CYCLES_FILE, d);
+
+function readRegua() {
+  try {
+    const d = JSON.parse(fs.readFileSync(REGUA_FILE, "utf-8"));
+    return { localTasks: Array.isArray(d.localTasks) ? d.localTasks : [], priorities: d.priorities && typeof d.priorities === "object" ? d.priorities : {} };
+  } catch {
+    return { localTasks: [], priorities: {} };
+  }
+}
+const saveRegua = (d) => writeJSON(REGUA_FILE, d);
 
 function readConfig() {
   try { return JSON.parse(fs.readFileSync(CONFIG_FILE, "utf-8")); } catch { return {}; }
@@ -950,6 +962,79 @@ async function runOverdueAlerts({ dryRun = false } = {}) {
   return results;
 }
 
+// ── Régua (linha do tempo de prioridades) API ───────────────────────────────────
+// Pública (como /api/nps) — não toca na Taskrow, só guarda estado local do dashboard:
+// tarefas "fantasma" (nunca sincronizadas pro Taskrow) e a ordem de prioridade
+// que o usuário define arrastando os cards, por "balde" (dia yyyy-mm-dd, ou "overdue").
+
+async function handleReguaApi(req, res, urlPath, method) {
+  // GET /api/regua — estado completo (tarefas locais + ordens de prioridade)
+  if (urlPath === "/api/regua" && method === "GET") {
+    return sendJson(res, 200, readRegua());
+  }
+
+  // POST /api/regua/tasks — cria uma tarefa local (só existe aqui, nunca vai pro Taskrow)
+  if (urlPath === "/api/regua/tasks" && method === "POST") {
+    const body = await parseBody(req);
+    const title = String(body.title || "").trim();
+    const dueDate = String(body.dueDate || "").trim();
+    if (!title) return sendJson(res, 400, { error: "title obrigatório" });
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dueDate)) return sendJson(res, 400, { error: "dueDate obrigatório (yyyy-mm-dd)" });
+    const data = readRegua();
+    const task = {
+      id: randomUUID(),
+      title,
+      description: body.description ? String(body.description) : "",
+      ownerUserID: body.ownerUserID != null ? Number(body.ownerUserID) : null,
+      dueDate,
+      createdAt: new Date().toISOString(),
+    };
+    data.localTasks.push(task);
+    saveRegua(data);
+    return sendJson(res, 201, task);
+  }
+
+  // PUT /api/regua/tasks/:id — edita uma tarefa local (título, descrição, responsável, dia)
+  const taskMatch = urlPath.match(/^\/api\/regua\/tasks\/([^/?]+)$/);
+  if (taskMatch && method === "PUT") {
+    const body = await parseBody(req);
+    const data = readRegua();
+    const task = data.localTasks.find((t) => t.id === taskMatch[1]);
+    if (!task) return sendJson(res, 404, { error: "Tarefa local não encontrada" });
+    if (body.title != null) task.title = String(body.title).trim();
+    if (body.description != null) task.description = String(body.description);
+    if (body.ownerUserID !== undefined) task.ownerUserID = body.ownerUserID != null ? Number(body.ownerUserID) : null;
+    if (body.dueDate != null && /^\d{4}-\d{2}-\d{2}$/.test(String(body.dueDate))) task.dueDate = String(body.dueDate);
+    saveRegua(data);
+    return sendJson(res, 200, task);
+  }
+
+  // DELETE /api/regua/tasks/:id — remove a tarefa local e limpa das ordens de prioridade
+  if (taskMatch && method === "DELETE") {
+    const data = readRegua();
+    data.localTasks = data.localTasks.filter((t) => t.id !== taskMatch[1]);
+    const key = `local:${taskMatch[1]}`;
+    for (const bucket of Object.keys(data.priorities)) {
+      data.priorities[bucket] = data.priorities[bucket].filter((k) => k !== key);
+    }
+    saveRegua(data);
+    return sendJson(res, 200, { ok: true });
+  }
+
+  // PUT /api/regua/priorities/:bucket — define a ordem (array de chaves "taskrow:<id>" | "local:<id>") de um balde
+  const priorityMatch = urlPath.match(/^\/api\/regua\/priorities\/([^/?]+)$/);
+  if (priorityMatch && method === "PUT") {
+    const body = await parseBody(req);
+    if (!Array.isArray(body.order)) return sendJson(res, 400, { error: "order (array) obrigatório" });
+    const data = readRegua();
+    data.priorities[decodeURIComponent(priorityMatch[1])] = body.order.map(String);
+    saveRegua(data);
+    return sendJson(res, 200, { ok: true });
+  }
+
+  return sendJson(res, 404, { error: "Endpoint não encontrado" });
+}
+
 // ── Configurações Gerais API (admin único) ──────────────────────────────────────
 
 async function handleAdminApi(req, res, urlPath, method) {
@@ -1137,6 +1222,12 @@ const server = http.createServer(async (req, res) => {
     // NPS API
     if (urlPath.startsWith("/api/nps")) {
       await handleNpsApi(req, res, urlPath, method);
+      return;
+    }
+
+    // Régua (tarefas locais + prioridades da linha do tempo)
+    if (urlPath.startsWith("/api/regua")) {
+      await handleReguaApi(req, res, urlPath, method);
       return;
     }
 
