@@ -23,6 +23,7 @@ interface CreateLocalTaskInput {
   title: string;
   description?: string;
   ownerUserID: number | null;
+  category?: string | null;
   dueDate: string;
 }
 

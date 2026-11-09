@@ -18,6 +18,8 @@ export interface RulerItem {
   ownerName: string;
   area: string;
   clientName: string;
+  /** Categoria do SLA de Design — só tarefas locais da régua carregam isso. */
+  category: string | null;
   taskrowTask: TaskrowTask | null;
   localTask: LocalRulerTask | null;
 }
@@ -89,6 +91,7 @@ export function useRulerBoard(windowDays: number) {
         ownerName: owner?.FullName || t.ownerUserLogin || "Sem responsável",
         area: owner?.FunctionGroupName || "Sem Área",
         clientName: t.clientDisplayName,
+        category: null,
         taskrowTask: t,
         localTask: null,
       });
@@ -106,6 +109,7 @@ export function useRulerBoard(windowDays: number) {
         ownerName: owner?.FullName || "Sem responsável",
         area: owner?.FunctionGroupName || "Sem Área",
         clientName: "",
+        category: lt.category || null,
         taskrowTask: null,
         localTask: lt,
       });

@@ -986,6 +986,7 @@ async function handleReguaApi(req, res, urlPath, method) {
       title,
       description: body.description ? String(body.description) : "",
       ownerUserID: body.ownerUserID != null ? Number(body.ownerUserID) : null,
+      category: body.category ? String(body.category) : null,
       dueDate,
       createdAt: new Date().toISOString(),
     };
@@ -1004,6 +1005,7 @@ async function handleReguaApi(req, res, urlPath, method) {
     if (body.title != null) task.title = String(body.title).trim();
     if (body.description != null) task.description = String(body.description);
     if (body.ownerUserID !== undefined) task.ownerUserID = body.ownerUserID != null ? Number(body.ownerUserID) : null;
+    if (body.category !== undefined) task.category = body.category ? String(body.category) : null;
     if (body.dueDate != null && /^\d{4}-\d{2}-\d{2}$/.test(String(body.dueDate))) task.dueDate = String(body.dueDate);
     saveRegua(data);
     return sendJson(res, 200, task);

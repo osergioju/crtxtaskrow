@@ -4,6 +4,8 @@ export interface LocalRulerTask {
   title: string;
   description: string;
   ownerUserID: number | null;
+  /** Categoria do SLA de Design (ver src/data/slaDesign.ts), opcional. */
+  category?: string | null;
   dueDate: string; // yyyy-mm-dd
   createdAt: string;
 }
