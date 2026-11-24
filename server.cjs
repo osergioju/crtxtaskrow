@@ -1270,13 +1270,36 @@ function inferCargo(user, roleOverrides) {
 async function buildFuncionarios() {
   const users = await getUsersForExport();
   const roleOverrides = new Map(readAdmin().userAreas.filter((o) => o.role).map((o) => [o.userID, o.role]));
-  return users.map((u) => ({
+  const known = new Set(users.map((u) => u.UserID));
+  const out = users.map((u) => ({
     id: String(u.UserID),
     nome: u.FullName || "",
     email: u.MainEmail || "",
     cargo: inferCargo(u, roleOverrides),
     ativo: !u.Inactive,
   }));
+
+  // ListUsers do Taskrow só devolve contas que ele considera "atuais" — testado com
+  // includeInactives/showInactives/inactive/all/includeDisabled, nenhum muda o
+  // resultado. Tarefas antigas ainda referenciam donos/criadores removidos/desativados
+  // dessa lista; pra não perder essas pessoas na migração, completamos com o nome
+  // visto nas próprias tarefas (ownerUserLogin/creationUserLogin). Não existe nenhuma
+  // fonte disponível pro email desses casos, então fica "".
+  let tasks = [];
+  try { tasks = await getTasksForExport(); } catch { /* sem tarefas em cache, segue sem o fallback */ }
+  const ghostNames = new Map();
+  for (const t of tasks) {
+    if (t.ownerUserID != null && !known.has(t.ownerUserID) && t.ownerUserLogin && !ghostNames.has(t.ownerUserID)) {
+      ghostNames.set(t.ownerUserID, t.ownerUserLogin);
+    }
+    if (t.creationUserID != null && !known.has(t.creationUserID) && t.creationUserLogin && !ghostNames.has(t.creationUserID)) {
+      ghostNames.set(t.creationUserID, t.creationUserLogin);
+    }
+  }
+  for (const [id, nome] of ghostNames) {
+    out.push({ id: String(id), nome, email: "", cargo: "operacao", ativo: false });
+  }
+  return out;
 }
 
 /** ID mais frequente numa lista (usado para inferir "responsável" de cliente/projeto a partir das tarefas). */
