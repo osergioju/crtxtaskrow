@@ -1,7 +1,7 @@
 module.exports = {
   apps: [
     {
-      name: "crttask",
+      name: "taskrow",
       script: "server.cjs",
       env: {
         NODE_ENV: "production",
