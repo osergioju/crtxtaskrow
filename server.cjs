@@ -1203,7 +1203,6 @@ async function handleAdminApi(req, res, urlPath, method) {
 
 const EXPORT_TOKEN = process.env.EXPORTACAO_TOKEN || "";
 const EXPORT_PAGE_SIZE = 500;
-const EXPORT_TASK_DETAILS_CACHE_FILE = path.join(DATA_DIR, "export_task_details_cache.json");
 
 function requireExportAuth(req, res) {
   if (!EXPORT_TOKEN) {
@@ -1234,35 +1233,6 @@ function sendExportList(req, res, items) {
   const totalPaginas = Math.ceil(items.length / tamanho);
   const start = (pagina - 1) * tamanho;
   return sendJson(res, 200, { dados: items.slice(start, start + tamanho), totalPaginas });
-}
-
-/** GET genérico à API do Taskrow (caminho já com query string, se houver). */
-function taskrowApiGet(apiPath, apiKey) {
-  return new Promise((resolve, reject) => {
-    const req = https.request(
-      {
-        hostname: "crtcomunicacao.taskrow.com",
-        port: 443,
-        path: apiPath,
-        method: "GET",
-        headers: { "__identifier": apiKey, "Content-Type": "application/json" },
-      },
-      (res) => {
-        const chunks = [];
-        res.on("data", (d) => chunks.push(d));
-        res.on("end", () => {
-          try {
-            if (res.statusCode === 401 || res.statusCode === 403) {
-              return reject(new Error(`Taskrow ${res.statusCode} em GET ${apiPath}`));
-            }
-            resolve(JSON.parse(Buffer.concat(chunks).toString("utf-8")));
-          } catch (e) { reject(e); }
-        });
-      }
-    );
-    req.on("error", reject);
-    req.end();
-  });
 }
 
 async function getUsersForExport() {
@@ -1389,76 +1359,20 @@ function mapExportPrioridade(t) {
   return "normal";
 }
 
-function readExportDetailsCache() {
-  try { return JSON.parse(fs.readFileSync(EXPORT_TASK_DETAILS_CACHE_FILE, "utf-8")); } catch { return {}; }
-}
-function saveExportDetailsCache(c) { fs.writeFileSync(EXPORT_TASK_DETAILS_CACHE_FILE, JSON.stringify(c), "utf-8"); }
-
 // O endpoint de busca em lote (advancedsearch, usado por data/tasks.json) não traz
-// descrição nem anexos — só a chamada de detalhe por tarefa traz (ver Métodos API
-// (3).pdf, p.23-24). Os nomes de campo exatos não são documentados ("// demais
-// informações da tarefa"), então extraímos de forma defensiva tentando os nomes mais
-// prováveis; valide numa amostra real após a primeira chamada.
-function extractDescricao(detail) {
-  const t = detail?.Task || detail?.TaskData || detail || {};
-  const candidates = [t.TaskItemComment, t.Description, t.Comment, t.Briefing, t.Notes, t.Memo];
-  const found = candidates.find((c) => typeof c === "string" && c.trim());
-  return found || "";
-}
-function extractAnexos(detail) {
-  const t = detail?.Task || detail?.TaskData || detail || {};
-  const list = t.Attachments || t.AttachmentList || t.Files || t.FileList || [];
-  if (!Array.isArray(list)) return [];
-  return list
-    .map((a) => ({ nome: a.Name || a.FileName || a.name || "", url: a.Url || a.FileUrl || a.DownloadUrl || a.url || "" }))
-    .filter((a) => a.nome || a.url);
-}
-
-async function runPool(items, limit, worker) {
-  let i = 0;
-  async function next() {
-    while (i < items.length) {
-      const idx = i++;
-      await worker(items[idx]);
-    }
-  }
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, next));
-}
-
-/**
- * Busca descrição/anexos por tarefa (1 chamada por tarefa não cacheada ainda) e
- * persiste em disco — paga o custo uma vez; chamadas seguintes reaproveitam o cache.
- * Falhas não são cacheadas (tentam de novo na próxima chamada); sem chave de API
- * configurada, simplesmente devolve o que já estiver em cache.
- */
-async function enrichTaskDetails(tasks, apiKey) {
-  const cache = readExportDetailsCache();
-  const pending = tasks.filter((t) => !cache[t.taskID]);
-  if (pending.length && apiKey) {
-    let dirty = false;
-    await runPool(pending, 8, async (t) => {
-      try {
-        const detail = await taskrowApiGet(
-          `/api/v1/Task/TaskDetail?clientNickname=${encodeURIComponent(t.clientNickName)}&jobNumber=${t.jobNumber}&taskNumber=${t.taskNumber}`,
-          apiKey
-        );
-        cache[t.taskID] = { descricao: extractDescricao(detail), anexos: extractAnexos(detail) };
-        dirty = true;
-      } catch (e) {
-        console.error(`[exportacao] Falha ao buscar detalhe da tarefa ${t.taskID}: ${e.message}`);
-      }
-    });
-    if (dirty) saveExportDetailsCache(cache);
-  }
-  return cache;
-}
-
-function buildBaseTarefa(t, detail) {
+// descrição nem anexos. A API do Taskrow só expõe isso via detalhe por tarefa
+// (Task/TaskDetail), que exige um connectionID — um GUID de sessão/conexão ativa de
+// usuário que não existe num job de backend — e a variante GetTaskByExternalCode só
+// funciona pra tarefas criadas com ExternalCode (não é o caso destas). Testado em
+// produção: toda chamada ao TaskDetail sem connectionID retorna corpo vazio. Por
+// isso descricao sai sempre "" e anexos é sempre omitido — não há como obter esses
+// dois campos em lote pelos meios documentados da API.
+function buildBaseTarefa(t) {
   const obj = {
     id: String(t.taskID),
     projetoId: t.jobID != null ? String(t.jobID) : null,
     titulo: t.taskTitle || "",
-    descricao: detail?.descricao ?? "",
+    descricao: "",
     status: mapExportStatus(t),
     prioridade: mapExportPrioridade(t),
     prazo: toIsoOrNull(t.dueDate),
@@ -1469,7 +1383,6 @@ function buildBaseTarefa(t, detail) {
   };
   const solicitante = (t.contactName || "").trim();
   if (solicitante) obj.solicitante = solicitante;
-  if (detail?.anexos?.length) obj.anexos = detail.anexos;
   return obj;
 }
 
@@ -1494,10 +1407,8 @@ async function handleExportApi(req, res, urlPath, method) {
       const isSubtarefa = urlPath === "/exportacao/subtarefas";
       const tasks = await getTasksForExport();
       const filtered = tasks.filter((t) => (isSubtarefa ? t.parentTaskID != null : t.parentTaskID == null));
-      const apiKey = readConfig().taskrowApiKey;
-      const cache = await enrichTaskDetails(filtered, apiKey);
       const out = filtered.map((t) => {
-        const base = buildBaseTarefa(t, cache[t.taskID]);
+        const base = buildBaseTarefa(t);
         if (isSubtarefa) base.tarefaPaiId = t.parentTaskID != null ? String(t.parentTaskID) : null;
         return base;
       });
