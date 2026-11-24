@@ -1191,6 +1191,325 @@ async function handleAdminApi(req, res, urlPath, method) {
   return sendJson(res, 404, { error: "Endpoint não encontrado" });
 }
 
+// ── Exportação de dados (migração única para novo sistema) ─────────────────────
+// Endpoints temporários e read-only: /exportacao/funcionarios, /clientes, /projetos,
+// /tarefas, /subtarefas. Autenticação: Bearer EXPORTACAO_TOKEN (variável de ambiente).
+// Clientes e projetos não têm cadastro mestre dedicado neste app — são derivados das
+// tarefas já cacheadas (data/tasks.json), que é a mesma fonte usada pelo resto do
+// dashboard. gestorResponsavelId/gestorId são heurísticos (dono mais frequente das
+// tarefas daquele cliente/projeto), pois a API do Taskrow não expõe um "responsável"
+// em nível de cliente/projeto nas listagens em lote (ver Métodos API (3).pdf, p.18-21).
+// cnpj fica sempre null pelo mesmo motivo (não há listagem em lote com CNPJ).
+
+const EXPORT_TOKEN = process.env.EXPORTACAO_TOKEN || "";
+const EXPORT_PAGE_SIZE = 500;
+const EXPORT_TASK_DETAILS_CACHE_FILE = path.join(DATA_DIR, "export_task_details_cache.json");
+
+function requireExportAuth(req, res) {
+  if (!EXPORT_TOKEN) {
+    sendJson(res, 500, { error: "EXPORTACAO_TOKEN não configurado no servidor (variável de ambiente)." });
+    return false;
+  }
+  const h = req.headers["authorization"] || "";
+  const token = h.startsWith("Bearer ") ? h.slice(7) : "";
+  if (!token || token !== EXPORT_TOKEN) {
+    sendJson(res, 401, { error: "Token de exportação inválido ou ausente." });
+    return false;
+  }
+  return true;
+}
+
+function toIsoOrNull(s) {
+  if (!s) return null;
+  const d = new Date(s);
+  return isNaN(d) ? null : d.toISOString();
+}
+
+/** Lista completa se <= 500 itens; senão pagina via ?pagina=1&tamanho=500 → { dados, totalPaginas }. */
+function sendExportList(req, res, items) {
+  if (items.length <= EXPORT_PAGE_SIZE) return sendJson(res, 200, items);
+  const u = new URL(req.url, "http://localhost");
+  const tamanho = Math.max(1, Number(u.searchParams.get("tamanho")) || EXPORT_PAGE_SIZE);
+  const pagina = Math.max(1, Number(u.searchParams.get("pagina")) || 1);
+  const totalPaginas = Math.ceil(items.length / tamanho);
+  const start = (pagina - 1) * tamanho;
+  return sendJson(res, 200, { dados: items.slice(start, start + tamanho), totalPaginas });
+}
+
+/** GET genérico à API do Taskrow (caminho já com query string, se houver). */
+function taskrowApiGet(apiPath, apiKey) {
+  return new Promise((resolve, reject) => {
+    const req = https.request(
+      {
+        hostname: "crtcomunicacao.taskrow.com",
+        port: 443,
+        path: apiPath,
+        method: "GET",
+        headers: { "__identifier": apiKey, "Content-Type": "application/json" },
+      },
+      (res) => {
+        const chunks = [];
+        res.on("data", (d) => chunks.push(d));
+        res.on("end", () => {
+          try {
+            if (res.statusCode === 401 || res.statusCode === 403) {
+              return reject(new Error(`Taskrow ${res.statusCode} em GET ${apiPath}`));
+            }
+            resolve(JSON.parse(Buffer.concat(chunks).toString("utf-8")));
+          } catch (e) { reject(e); }
+        });
+      }
+    );
+    req.on("error", reject);
+    req.end();
+  });
+}
+
+async function getUsersForExport() {
+  let users = readJSON(USERS_FILE);
+  if (!Array.isArray(users) || !users.length) {
+    const apiKey = readConfig().taskrowApiKey;
+    if (!apiKey) throw new Error("Chave de API do Taskrow não configurada (Configurações Gerais) — necessária para buscar funcionários.");
+    users = await fetchUsersFromTaskrow(apiKey);
+  }
+  return users;
+}
+
+async function getTasksForExport() {
+  let tasks = readJSON(TASKS_FILE);
+  if (!Array.isArray(tasks) || !tasks.length) {
+    const apiKey = readConfig().taskrowApiKey;
+    if (!apiKey) throw new Error("Nenhuma tarefa em cache e chave de API do Taskrow não configurada (Configurações Gerais).");
+    await fetchTasksFromTaskrow(apiKey);
+    tasks = readJSON(TASKS_FILE);
+  }
+  return tasks;
+}
+
+const GESTAO_KEYWORDS = ["gestor", "diretor", "coordenador", "supervisor", "head", "sócio", "socio", "gerente"];
+
+/** cargo: override manual (Configurações Gerais, diretoria/equipe) > heurística por título/perfil. */
+function inferCargo(user, roleOverrides) {
+  const override = roleOverrides.get(user.UserID);
+  if (override === "diretoria") return "gestao";
+  if (override === "equipe") return "operacao";
+  const text = `${user.ProfileTitle || ""} ${user.UserFunctionTitle || ""} ${user.ApprovalGroup || ""}`.toLowerCase();
+  return GESTAO_KEYWORDS.some((k) => text.includes(k)) ? "gestao" : "operacao";
+}
+
+async function buildFuncionarios() {
+  const users = await getUsersForExport();
+  const roleOverrides = new Map(readAdmin().userAreas.filter((o) => o.role).map((o) => [o.userID, o.role]));
+  return users.map((u) => ({
+    id: String(u.UserID),
+    nome: u.FullName || "",
+    email: u.MainEmail || "",
+    cargo: inferCargo(u, roleOverrides),
+    ativo: !u.Inactive,
+  }));
+}
+
+/** ID mais frequente numa lista (usado para inferir "responsável" de cliente/projeto a partir das tarefas). */
+function mostFrequent(ids) {
+  const counts = new Map();
+  for (const id of ids) {
+    if (id == null) continue;
+    counts.set(id, (counts.get(id) || 0) + 1);
+  }
+  let best = null, bestCount = 0;
+  for (const [id, c] of counts) if (c > bestCount) { best = id; bestCount = c; }
+  return best;
+}
+
+function buildClientes(tasks) {
+  const byClient = new Map();
+  for (const t of tasks) {
+    if (t.clientID == null) continue;
+    if (!byClient.has(t.clientID)) byClient.set(t.clientID, { nome: t.clientDisplayName || t.clientNickName, owners: [] });
+    byClient.get(t.clientID).owners.push(t.ownerUserID);
+  }
+  return Array.from(byClient.entries()).map(([clientID, info]) => {
+    const gestor = mostFrequent(info.owners);
+    return {
+      id: String(clientID),
+      nome: info.nome || `Cliente ${clientID}`,
+      cnpj: null,
+      ativo: true,
+      gestorResponsavelId: gestor != null ? String(gestor) : null,
+    };
+  });
+}
+
+function inferTipoProjeto(nomeMaistags) {
+  const text = nomeMaistags.toLowerCase();
+  if (/(rede(s)? social|instagram|facebook|linkedin|tiktok|^post|\bposts\b|social media)/.test(text)) return "redes_sociais";
+  if (/(site|institucional|landing|p[áa]gina|\bweb\b)/.test(text)) return "site";
+  if (/(v[íi]deo|filme|motion)/.test(text)) return "video";
+  return "geral";
+}
+
+function buildProjetos(tasks) {
+  const byJob = new Map();
+  for (const t of tasks) {
+    if (t.jobID == null) continue;
+    if (!byJob.has(t.jobID)) byJob.set(t.jobID, { clienteId: t.clientID, nome: t.jobTitle, tagsText: "", owners: [] });
+    const entry = byJob.get(t.jobID);
+    entry.owners.push(t.ownerUserID);
+    if (t.tags) entry.tagsText += " " + t.tags;
+  }
+  return Array.from(byJob.entries()).map(([jobID, info]) => {
+    const gestor = mostFrequent(info.owners);
+    return {
+      id: String(jobID),
+      clienteId: info.clienteId != null ? String(info.clienteId) : null,
+      nome: info.nome || `Projeto ${jobID}`,
+      tipo: inferTipoProjeto(`${info.nome || ""} ${info.tagsText}`),
+      ativo: true,
+      gestorId: gestor != null ? String(gestor) : null,
+    };
+  });
+}
+
+/** Espelha a lógica de src/lib/classifyTask.ts, traduzida para o vocabulário de 5 valores da exportação. */
+function mapExportStatus(t) {
+  if (t.closed) return "concluida";
+  const pipeline = (t.pipelineStep || "").toLowerCase();
+  if (pipeline.includes("cancelad")) return "cancelada";
+  if (isClientBlocking(pipeline)) return "aguardando_aprovacao";
+  const OPEN_BUCKET = ["não iniciada", "nao iniciada", "backlog", "stand by", "planejamento", "solicita", "entrada do lead", "orçamento enviado", "orcamento enviado"];
+  if (!pipeline || OPEN_BUCKET.some((k) => pipeline.includes(k))) return "aberta";
+  return "em_andamento";
+}
+
+function mapExportPrioridade(t) {
+  const tags = (t.tags || "").toLowerCase();
+  const pipeline = (t.pipelineStep || "").toLowerCase();
+  if (tags.includes("urgente") || pipeline.includes("urgente")) return "urgente";
+  if (tags.includes("alta")) return "alta";
+  return "normal";
+}
+
+function readExportDetailsCache() {
+  try { return JSON.parse(fs.readFileSync(EXPORT_TASK_DETAILS_CACHE_FILE, "utf-8")); } catch { return {}; }
+}
+function saveExportDetailsCache(c) { fs.writeFileSync(EXPORT_TASK_DETAILS_CACHE_FILE, JSON.stringify(c), "utf-8"); }
+
+// O endpoint de busca em lote (advancedsearch, usado por data/tasks.json) não traz
+// descrição nem anexos — só a chamada de detalhe por tarefa traz (ver Métodos API
+// (3).pdf, p.23-24). Os nomes de campo exatos não são documentados ("// demais
+// informações da tarefa"), então extraímos de forma defensiva tentando os nomes mais
+// prováveis; valide numa amostra real após a primeira chamada.
+function extractDescricao(detail) {
+  const t = detail?.Task || detail?.TaskData || detail || {};
+  const candidates = [t.TaskItemComment, t.Description, t.Comment, t.Briefing, t.Notes, t.Memo];
+  const found = candidates.find((c) => typeof c === "string" && c.trim());
+  return found || "";
+}
+function extractAnexos(detail) {
+  const t = detail?.Task || detail?.TaskData || detail || {};
+  const list = t.Attachments || t.AttachmentList || t.Files || t.FileList || [];
+  if (!Array.isArray(list)) return [];
+  return list
+    .map((a) => ({ nome: a.Name || a.FileName || a.name || "", url: a.Url || a.FileUrl || a.DownloadUrl || a.url || "" }))
+    .filter((a) => a.nome || a.url);
+}
+
+async function runPool(items, limit, worker) {
+  let i = 0;
+  async function next() {
+    while (i < items.length) {
+      const idx = i++;
+      await worker(items[idx]);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, next));
+}
+
+/**
+ * Busca descrição/anexos por tarefa (1 chamada por tarefa não cacheada ainda) e
+ * persiste em disco — paga o custo uma vez; chamadas seguintes reaproveitam o cache.
+ * Falhas não são cacheadas (tentam de novo na próxima chamada); sem chave de API
+ * configurada, simplesmente devolve o que já estiver em cache.
+ */
+async function enrichTaskDetails(tasks, apiKey) {
+  const cache = readExportDetailsCache();
+  const pending = tasks.filter((t) => !cache[t.taskID]);
+  if (pending.length && apiKey) {
+    let dirty = false;
+    await runPool(pending, 8, async (t) => {
+      try {
+        const detail = await taskrowApiGet(
+          `/api/v1/Task/TaskDetail?clientNickname=${encodeURIComponent(t.clientNickName)}&jobNumber=${t.jobNumber}&taskNumber=${t.taskNumber}`,
+          apiKey
+        );
+        cache[t.taskID] = { descricao: extractDescricao(detail), anexos: extractAnexos(detail) };
+        dirty = true;
+      } catch (e) {
+        console.error(`[exportacao] Falha ao buscar detalhe da tarefa ${t.taskID}: ${e.message}`);
+      }
+    });
+    if (dirty) saveExportDetailsCache(cache);
+  }
+  return cache;
+}
+
+function buildBaseTarefa(t, detail) {
+  const obj = {
+    id: String(t.taskID),
+    projetoId: t.jobID != null ? String(t.jobID) : null,
+    titulo: t.taskTitle || "",
+    descricao: detail?.descricao ?? "",
+    status: mapExportStatus(t),
+    prioridade: mapExportPrioridade(t),
+    prazo: toIsoOrNull(t.dueDate),
+    responsavelId: t.ownerUserID != null ? String(t.ownerUserID) : null,
+    criadorId: t.creationUserID != null ? String(t.creationUserID) : null,
+    criadoEm: toIsoOrNull(t.creationDate),
+    concluidaEm: toIsoOrNull(t.closeDate),
+  };
+  const solicitante = (t.contactName || "").trim();
+  if (solicitante) obj.solicitante = solicitante;
+  if (detail?.anexos?.length) obj.anexos = detail.anexos;
+  return obj;
+}
+
+async function handleExportApi(req, res, urlPath, method) {
+  if (!requireExportAuth(req, res)) return;
+  if (method !== "GET") return sendJson(res, 404, { error: "Endpoint não encontrado" });
+
+  try {
+    if (urlPath === "/exportacao/funcionarios") {
+      return sendExportList(req, res, await buildFuncionarios());
+    }
+
+    if (urlPath === "/exportacao/clientes") {
+      return sendExportList(req, res, buildClientes(await getTasksForExport()));
+    }
+
+    if (urlPath === "/exportacao/projetos") {
+      return sendExportList(req, res, buildProjetos(await getTasksForExport()));
+    }
+
+    if (urlPath === "/exportacao/tarefas" || urlPath === "/exportacao/subtarefas") {
+      const isSubtarefa = urlPath === "/exportacao/subtarefas";
+      const tasks = await getTasksForExport();
+      const filtered = tasks.filter((t) => (isSubtarefa ? t.parentTaskID != null : t.parentTaskID == null));
+      const apiKey = readConfig().taskrowApiKey;
+      const cache = await enrichTaskDetails(filtered, apiKey);
+      const out = filtered.map((t) => {
+        const base = buildBaseTarefa(t, cache[t.taskID]);
+        if (isSubtarefa) base.tarefaPaiId = t.parentTaskID != null ? String(t.parentTaskID) : null;
+        return base;
+      });
+      return sendExportList(req, res, out);
+    }
+  } catch (e) {
+    return sendJson(res, 500, { error: e.message });
+  }
+
+  return sendJson(res, 404, { error: "Endpoint não encontrado" });
+}
+
 // ── Agendador (sem dependências) ────────────────────────────────────────────────
 
 function adminScheduleTick() {
@@ -1236,6 +1555,12 @@ const server = http.createServer(async (req, res) => {
     // Configurações Gerais (admin único: chave de fundo, Teams, vínculos, áreas)
     if (urlPath.startsWith("/api/admin")) {
       await handleAdminApi(req, res, urlPath, method);
+      return;
+    }
+
+    // Exportação de dados (migração única — endpoints temporários, token fixo)
+    if (urlPath.startsWith("/exportacao")) {
+      await handleExportApi(req, res, urlPath, method);
       return;
     }
 

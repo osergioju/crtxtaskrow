@@ -6,3 +6,6 @@ data/users.json
 
 # Segredo: chave de API do Taskrow usada pelos jobs de fundo (analytics/alertas)
 data/config.json
+
+# Cache da exportação temporária de migração (pode conter briefing/anexos de clientes)
+data/export_task_details_cache.json
